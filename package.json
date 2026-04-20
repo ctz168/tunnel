@@ -8,9 +8,12 @@
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
     "db:push": "prisma db push",
-    "db:generate": "prisma generate",
+    "db:generate": "prisma generate && cp -r node_modules/.prisma mini-services/tunnel-server/node_modules/.prisma",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "tunnel:dev": "cd mini-services/tunnel-server && DATABASE_URL=file:../../db/custom.db bun --hot index.ts",
+    "tunnel:start": "cd mini-services/tunnel-server && DATABASE_URL=file:../../db/custom.db bun index.ts",
+    "setup": "bun install && DATABASE_URL=file:db/custom.db bunx prisma db push && bun run db:generate && cd mini-services/tunnel-server && bun install"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

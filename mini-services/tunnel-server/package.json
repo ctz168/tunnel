@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "bun --hot index.ts",
-    "start": "bun index.ts"
+    "dev": "DATABASE_URL=file:../../db/custom.db bun --hot index.ts",
+    "start": "DATABASE_URL=file:../../db/custom.db bun index.ts",
+    "postinstall": "cd .. && cd .. && DATABASE_URL=file:db/custom.db bunx prisma generate && cp -r node_modules/.prisma mini-services/tunnel-server/node_modules/.prisma 2>/dev/null || true"
   },
   "dependencies": {
     "ws": "^8.18.0",

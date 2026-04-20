@@ -2,14 +2,27 @@ import { PrismaClient } from '@prisma/client';
 import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import { URL } from 'url';
+import path from 'path';
 
 const prisma = new PrismaClient();
-const PORT = 3002;
+
+// 端口：通过环境变量或默认 3002
+const PORT = parseInt(process.env.TUNNEL_PORT || '3002', 10);
+
+// 获取数据库路径（用于确认共享同一个 DB）
+const dbPath = process.env.DATABASE_URL?.replace('file:', '') || path.join(__dirname, 'tunnel.db');
+console.log(`[DB] 数据库路径: ${dbPath}`);
 
 // Map: tunnelCode -> WebSocket connection (tunnel client)
 const activeTunnels = new Map<string, WebSocket>();
 // Map: tunnelCode -> metadata
 const tunnelMeta = new Map<string, { connectedAt: Date; bytesIn: number; bytesOut: number; requestCount: number }>();
+
+// 获取服务器域名配置
+async function getServerDomain(): Promise<string> {
+  const config = await prisma.serverConfig.findFirst();
+  return config?.serverDomain || 'aicq.online:1018';
+}
 
 function log(tunnelId: string, action: string, message: string, ip?: string, bytesIn = 0, bytesOut = 0) {
   prisma.tunnelLog.create({
@@ -34,7 +47,7 @@ wss.on('connection', async (ws, req) => {
   const tunnel = await prisma.tunnel.findFirst({
     where: {
       OR: [
-        { tunnelCode: key },
+        { tunnelCode: key.toUpperCase() },
         { authToken: key },
       ]
     }
@@ -45,6 +58,9 @@ wss.on('connection', async (ws, req) => {
     ws.close(1008, 'Authentication failed');
     return;
   }
+
+  // 获取服务器域名
+  const serverDomain = await getServerDomain();
 
   // 更新隧道状态
   await prisma.tunnel.update({
@@ -63,6 +79,8 @@ wss.on('connection', async (ws, req) => {
     message: '隧道已建立',
     tunnelCode: tunnel.tunnelCode,
     localPort: tunnel.localPort,
+    publicUrl: `http://${serverDomain}/${tunnel.tunnelCode}`,
+    serverDomain,
   }));
 
   ws.on('message', (data) => {
@@ -100,13 +118,14 @@ async function handleApiRequest(req: http.IncomingMessage, res: http.ServerRespo
 
   // GET /api/tunnel/status
   if (urlPath === '/api/tunnel/status' && method === 'GET') {
+    const serverDomain = await getServerDomain();
     const tunnels = await prisma.tunnel.findMany({ orderBy: { createdAt: 'desc' } });
     const statusMap: Record<string, { online: boolean; connectedAt?: Date; bytesIn: number; bytesOut: number; requestCount: number }> = {};
     for (const [code, meta] of tunnelMeta.entries()) {
       statusMap[code] = { online: true, connectedAt: meta.connectedAt, bytesIn: meta.bytesIn, bytesOut: meta.bytesOut, requestCount: meta.requestCount };
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ tunnels, status: statusMap }));
+    res.end(JSON.stringify({ tunnels, status: statusMap, serverDomain }));
     return true;
   }
 
@@ -145,12 +164,13 @@ const server = http.createServer(async (req, res) => {
   // 路径格式: /{tunnelCode}/... 或 /{tunnelCode}
   const pathMatch = url.match(/^\/([a-zA-Z0-9]{8})(\/.*)?$/);
   if (!pathMatch) {
-    res.writeHead(404, { 'Content-Type': 'text/html' });
-    res.end('<h1>TunnelNet</h1><p>无效的隧道地址。请使用 8 位隧道密钥访问。</p>');
+    const serverDomain = await getServerDomain();
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<h1>TunnelNet</h1><p>无效的隧道地址。请使用 8 位隧道密钥访问: <code>http://${serverDomain}/XXXXXXXX</code></p>`);
     return;
   }
 
-  const tunnelCode = pathMatch[1];
+  const tunnelCode = pathMatch[1].toUpperCase();
   const remainingPath = pathMatch[2] || '/';
 
   const ws = activeTunnels.get(tunnelCode);
@@ -269,8 +289,13 @@ setInterval(() => {
   }
 }, 30000);
 
-server.listen(PORT, () => {
-  console.log(`[Tunnel Server] 运行中，端口: ${PORT}`);
-  console.log(`[Tunnel Server] WebSocket: ws://localhost:${PORT}/ws?key=<8位密钥>`);
-  console.log(`[Tunnel Server] 公网路由: http://<域名>/{8位密钥}/...`);
+server.listen(PORT, async () => {
+  const domain = await getServerDomain();
+  console.log('');
+  console.log('  TunnelNet Server v1.0');
+  console.log(`  域名: ${domain}`);
+  console.log(`  端口: ${PORT}`);
+  console.log(`  WebSocket: ws://localhost:${PORT}/ws?key=<8位密钥>`);
+  console.log(`  公网路由: http://${domain}/<8位密钥>/...`);
+  console.log('');
 });
