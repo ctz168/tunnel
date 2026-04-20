@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  title     String
+  content   String?
+  published Boolean  @default(false)
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Tunnel {
+  id          String   @id @default(cuid())
+  name        String
+  subdomain   String   @unique
+  localPort   Int
+  localHost   String   @default("localhost")
+  authToken   String   @unique
+  protocol    String   @default("http") // http, https, tcp
+  status      String   @default("offline") // online, offline, connecting
+  maxConn     Int      @default(10)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  logs TunnelLog[]
+}
+
+model TunnelLog {
+  id        String   @id @default(cuid())
+  tunnelId  String
+  action    String   // connect, disconnect, request, error
+  message   String
+  ip        String?
+  bytesIn   Int      @default(0)
+  bytesOut  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  tunnel Tunnel @relation(fields: [tunnelId], references: [id], onDelete: Cascade)
+}
