@@ -58,6 +58,16 @@ export async function DELETE(
       return NextResponse.json({ error: '隧道不存在' }, { status: 404 });
     }
 
+    // Bug 14: 通知 tunnel-server 断开对应的 WebSocket 连接
+    try {
+      await fetch(`http://localhost:3002/api/tunnel/${tunnel.tunnelCode}`, {
+        method: 'DELETE',
+        signal: AbortSignal.timeout(3000),
+      });
+    } catch {
+      // tunnel-server 不可用时忽略
+    }
+
     // 删除隧道（级联删除日志）
     await db.tunnel.delete({ where: { id } });
 
@@ -88,7 +98,13 @@ export async function PATCH(
 
     const updateData: Record<string, unknown> = {};
     if (name !== undefined) updateData.name = name;
-    if (localPort !== undefined) updateData.localPort = parseInt(localPort, 10);
+    if (localPort !== undefined) {
+      const port = parseInt(localPort, 10);
+      if (isNaN(port) || port < 1 || port > 65535) {
+        return NextResponse.json({ error: '端口号无效' }, { status: 400 });
+      }
+      updateData.localPort = port;
+    }
     if (localHost !== undefined) updateData.localHost = localHost;
     if (protocol !== undefined) updateData.protocol = protocol;
     if (description !== undefined) updateData.description = description;

@@ -8,18 +8,14 @@ export async function GET() {
     });
 
     if (!statusRes.ok) {
-      return NextResponse.json(
-        { error: '隧道服务器不可用', status: 'offline' },
-        { status: 503 }
-      );
+      // 隧道服务器 HTTP 不可达
+      return NextResponse.json({ status: 'offline', tunnels: {} });
     }
 
     const data = await statusRes.json();
     return NextResponse.json({ status: 'online', ...data });
   } catch {
-    return NextResponse.json(
-      { error: '隧道服务器不可用', status: 'offline' },
-      { status: 503 }
-    );
+    // 隧道服务器完全不可用
+    return NextResponse.json({ status: 'offline', tunnels: {} });
   }
 }
