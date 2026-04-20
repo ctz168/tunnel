@@ -8,6 +8,7 @@ const prisma = new PrismaClient();
 
 // 端口：通过环境变量或默认 3002
 const PORT = parseInt(process.env.TUNNEL_PORT || '3002', 10);
+const HOST = process.env.TUNNEL_HOST || '::'; // 默认监听 IPv6 dual-stack（同时兼容 IPv4）
 
 // 获取数据库路径（用于确认共享同一个 DB）
 const dbPath = process.env.DATABASE_URL?.replace('file:', '') || path.join(__dirname, 'tunnel.db');
@@ -152,9 +153,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2) 跳过本地请求
+  // 2) 跳过本地请求（IPv4 + IPv6 回环）
   const host = req.headers.host || '';
-  if (host.includes('localhost') || host.includes('127.0.0.1')) {
+  const remoteAddr = req.socket.remoteAddress || '';
+  const isLocal = host.includes('localhost') || host.includes('127.0.0.1') || host.includes('[::1]')
+    || remoteAddr === '::1' || remoteAddr === '127.0.0.1' || remoteAddr.startsWith('::ffff:127.');
+  if (isLocal) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: '未知路由' }));
     return;
@@ -289,13 +293,15 @@ setInterval(() => {
   }
 }, 30000);
 
-server.listen(PORT, async () => {
+server.listen(PORT, HOST, async () => {
   const domain = await getServerDomain();
+  const addr = server.address();
+  const listenInfo = typeof addr === 'object' && addr ? `${addr.family} ${addr.address}:${addr.port}` : `${HOST}:${PORT}`;
   console.log('');
-  console.log('  TunnelNet Server v1.0');
+  console.log('  TunnelNet Server v1.1 (IPv6/IPv4 dual-stack)');
+  console.log(`  监听: ${listenInfo}`);
   console.log(`  域名: ${domain}`);
-  console.log(`  端口: ${PORT}`);
-  console.log(`  WebSocket: ws://localhost:${PORT}/ws?key=<8位密钥>`);
+  console.log(`  WebSocket: ws://${domain}/ws?key=<8位密钥>`);
   console.log(`  公网路由: http://${domain}/<8位密钥>/...`);
   console.log('');
 });

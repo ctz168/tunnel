@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  // 生产模式监听 IPv6 dual-stack
+  serverExternalPackages: [],
 };
 
 export default nextConfig;

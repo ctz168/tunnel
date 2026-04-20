@@ -21,3 +21,24 @@ Stage Summary:
 - 客户端纯CLI，只需 --key + --port 即可运行
 - 服务端域名默认 aicq.online:1018，可在Dashboard中修改
 - 路径路由模式: http://域名/8位密钥
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: 添加 IPv6 支持
+
+Work Log:
+- tunnel-server: 添加 TUNNEL_HOST 环境变量，默认 `::` (IPv6 dual-stack)
+- tunnel-server: 本地回环检测增加 ::1 和 ::ffff:127.* 支持
+- tunnel-server: 启动日志显示实际监听地址和协议族 (IPv4/IPv6)
+- tunnel-client: 添加 IPv6 DNS 解析器，优先解析 AAAA 记录，回退 A 记录
+- tunnel-client: 支持 IPv6 服务器地址格式 [2001:db8::1]:port
+- tunnel-client: 本地服务支持 IPv6 地址 ::1 和 [::1]
+- Next.js Dashboard: dev 命令添加 -H :: 参数
+- Next.js Dashboard: start 命令添加 HOST=:: 环境变量
+- 验证: tunnel-server 成功启动监听 IPv6 :::3002
+- 验证: Next.js build 成功
+
+Stage Summary:
+- 所有组件已支持 IPv6 dual-stack (同时兼容 IPv4)
+- 关键变更: server.listen(PORT, '::'), next dev -H ::, 自定义 DNS lookup
