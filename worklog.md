@@ -42,3 +42,25 @@ Work Log:
 Stage Summary:
 - 所有组件已支持 IPv6 dual-stack (同时兼容 IPv4)
 - 关键变更: server.listen(PORT, '::'), next dev -H ::, 自定义 DNS lookup
+
+---
+Task ID: 3
+Agent: Main Agent + Sub-agent
+Task: 全流程测试 TunnelNet 并修复所有 Bug
+
+Work Log:
+- 启动 tunnel-server 和 Next.js Dashboard 进行全流程测试
+- 发现并修复 Bug 1: tunnel-server 本地请求拦截过于激进（删除 isLocal 逻辑）
+- 发现并修复 Bug 2: tunnel-server .env 中引号导致 DATABASE_URL 解析错误
+- 发现并修复 Bug 3: SQLite 相对路径在 Prisma 中解析异常（多个 .db 文件被创建）
+  - 修复: 所有 .env 使用绝对路径 file:/home/z/my-project/db/custom.db
+  - tunnel-server 代码中动态解析绝对路径 (resolveDbPath)
+- 发现并修复 Bug 4: Prisma 缓存导致 .next/ 需要清理
+- E2E 测试全流程通过: 创建隧道 → 客户端连接 → HTTP代理转发 → 路径保持
+
+Stage Summary:
+- 修复了 4 个 Bug
+- API CRUD 全部通过
+- WebSocket 客户端连接正常
+- HTTP 代理转发正常（路径保持正确）
+- 关键修改文件: mini-services/tunnel-server/index.ts, mini-services/tunnel-server/.env

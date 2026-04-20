@@ -3,6 +3,23 @@ import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import { URL } from 'url';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+// 动态解析数据库绝对路径，确保与主项目使用同一个数据库
+function resolveDbPath(): string {
+  const envUrl = process.env.DATABASE_URL || '';
+  const dbFile = envUrl.replace(/^file:/, '');
+  if (!dbFile) {
+    return path.resolve(__dirname, '../../db/custom.db');
+  }
+  // 如果已经是绝对路径，直接使用
+  if (path.isAbsolute(dbFile)) return dbFile;
+  // 相对路径：基于 tunnel-server 目录解析
+  return path.resolve(__dirname, dbFile);
+}
+
+const ABS_DB_PATH = resolveDbPath();
+process.env.DATABASE_URL = `file:${ABS_DB_PATH}`;
 
 const prisma = new PrismaClient();
 
@@ -11,8 +28,7 @@ const PORT = parseInt(process.env.TUNNEL_PORT || '3002', 10);
 const HOST = process.env.TUNNEL_HOST || '::'; // 默认监听 IPv6 dual-stack（同时兼容 IPv4）
 
 // 获取数据库路径（用于确认共享同一个 DB）
-const dbPath = process.env.DATABASE_URL?.replace('file:', '') || path.join(__dirname, 'tunnel.db');
-console.log(`[DB] 数据库路径: ${dbPath}`);
+console.log(`[DB] 数据库路径: ${ABS_DB_PATH}`);
 
 // Map: tunnelCode -> WebSocket connection (tunnel client)
 const activeTunnels = new Map<string, WebSocket>();
@@ -153,18 +169,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2) 跳过本地请求（IPv4 + IPv6 回环）
-  const host = req.headers.host || '';
-  const remoteAddr = req.socket.remoteAddress || '';
-  const isLocal = host.includes('localhost') || host.includes('127.0.0.1') || host.includes('[::1]')
-    || remoteAddr === '::1' || remoteAddr === '127.0.0.1' || remoteAddr.startsWith('::ffff:127.');
-  if (isLocal) {
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: '未知路由' }));
-    return;
-  }
-
-  // 3) 从 URL 路径中提取 tunnelCode
+  // 2) 从 URL 路径中提取 tunnelCode
   // 路径格式: /{tunnelCode}/... 或 /{tunnelCode}
   const pathMatch = url.match(/^\/([a-zA-Z0-9]{8})(\/.*)?$/);
   if (!pathMatch) {
