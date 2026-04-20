@@ -1,26 +1,23 @@
 #!/usr/bin/env bun
 /**
- * TunnelNet Client - 固定域名内网穿透客户端
+ * TunnelNet Client - 内网穿透客户端
  *
  * 使用方法:
- *   bun tunnel-client.ts --server ws://your-server.com:3002 --token YOUR_TOKEN --subdomain myapp --local-port 8080
+ *   bun tunnel-client.ts --key ABCD1234 --port 8080
  *
  * 参数:
- *   --server       隧道服务器 WebSocket 地址 (必填)
- *   --token        隧道认证 Token (必填)
- *   --subdomain    分配的子域名 (必填)
- *   --local-port   本地服务端口 (必填)
- *   --local-host   本地服务地址 (默认: localhost)
+ *   --key         8位隧道密钥 (必填，从 Dashboard 获取)
+ *   --port        本地服务端口 (必填)
+ *   --server      服务器地址 (默认: aicq.online:1018)
+ *   --host        本地服务地址 (默认: localhost)
  */
 
 import WebSocket from 'ws';
 import http from 'http';
-import { URL } from 'url';
 
 interface ClientConfig {
   server: string;
-  token: string;
-  subdomain: string;
+  key: string;
   localPort: number;
   localHost: string;
 }
@@ -31,39 +28,42 @@ function parseArgs(): ClientConfig {
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      case '--server':
+      case '--server': case '-s':
         config.server = args[++i];
         break;
-      case '--token':
-        config.token = args[++i];
+      case '--key': case '-k':
+        config.key = args[++i];
         break;
-      case '--subdomain':
-        config.subdomain = args[++i];
-        break;
-      case '--local-port':
+      case '--port': case '-p':
         config.localPort = parseInt(args[++i], 10);
         break;
-      case '--local-host':
+      case '--host': case '-h':
         config.localHost = args[++i];
         break;
     }
   }
 
-  if (!config.server || !config.token || !config.subdomain || !config.localPort) {
-    console.error('❌ 缺少必填参数');
+  if (!config.key || !config.localPort) {
     console.error('');
-    console.error('使用方法:');
-    console.error('  bun tunnel-client.ts --server <ws地址> --token <token> --subdomain <子域名> --local-port <端口>');
+    console.error('  TunnelNet Client - 内网穿透客户端');
     console.error('');
-    console.error('示例:');
-    console.error('  bun tunnel-client.ts --server ws://tunnel.example.com:3002 --token abc123... --subdomain myapp --local-port 8080');
+    console.error('  用法: bun tunnel-client.ts --key <8位密钥> --port <本地端口>');
+    console.error('');
+    console.error('  参数:');
+    console.error('    --key,  -k    8位隧道密钥 (必填)');
+    console.error('    --port, -p    本地服务端口 (必填)');
+    console.error('    --server,-s   服务器地址 (默认: aicq.online:1018)');
+    console.error('    --host, -h    本地地址 (默认: localhost)');
+    console.error('');
+    console.error('  示例:');
+    console.error('    bun tunnel-client.ts --key ABCD1234 --port 8080');
+    console.error('');
     process.exit(1);
   }
 
   return {
-    server: config.server!,
-    token: config.token!,
-    subdomain: config.subdomain!,
+    server: config.server || 'aicq.online:1018',
+    key: config.key!.toUpperCase(),
     localPort: config.localPort!,
     localHost: config.localHost || 'localhost',
   };
@@ -73,12 +73,9 @@ class TunnelClient {
   private config: ClientConfig;
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingRequests = new Map<string, {
-    resolve: (data: { statusCode: number; headers: Record<string, string>; body?: string }) => void;
-    timeout: ReturnType<typeof setTimeout>;
-  }>();
   private requestCount = 0;
   private startTime = Date.now();
+  private statusTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(config: ClientConfig) {
     this.config = config;
@@ -86,34 +83,37 @@ class TunnelClient {
 
   start() {
     console.log('');
-    console.log('╔══════════════════════════════════════════════╗');
-    console.log('║        TunnelNet Client - 隧道客户端          ║');
-    console.log('╚══════════════════════════════════════════════╝');
+    console.log('  ╔══════════════════════════════════════════╗');
+    console.log('  ║        TunnelNet Client v1.0              ║');
+    console.log('  ╚══════════════════════════════════════════╝');
     console.log('');
-    console.log(`📡 服务器地址: ${this.config.server}`);
-    console.log(`🌐 子域名:     ${this.config.subdomain}.tunnel.local`);
-    console.log(`💻 本地地址:   ${this.config.localHost}:${this.config.localPort}`);
+    console.log(`  服务器:   ${this.config.server}`);
+    console.log(`  密钥:     ${this.config.key}`);
+    console.log(`  本地:     ${this.config.localHost}:${this.config.localPort}`);
     console.log('');
-    console.log('⏳ 正在连接隧道服务器...');
+    console.log('  正在连接隧道服务器...');
+    console.log('');
 
     this.connect();
   }
 
   private connect() {
-    const wsUrl = `${this.config.server}/ws?token=${encodeURIComponent(this.config.token)}&subdomain=${encodeURIComponent(this.config.subdomain)}`;
+    // 确定服务器 WebSocket 地址
+    const serverHttp = this.config.server.startsWith('http')
+      ? this.config.server
+      : `http://${this.config.server}`;
+    const wsUrl = serverHttp.replace(/^http/, 'ws') + `/ws?key=${encodeURIComponent(this.config.key)}`;
 
     try {
       this.ws = new WebSocket(wsUrl);
     } catch (err) {
-      console.error(`❌ 连接失败: ${err}`);
+      console.error(`  连接失败: ${err}`);
       this.scheduleReconnect();
       return;
     }
 
     this.ws.on('open', () => {
-      console.log('✅ 隧道连接已建立！');
-      console.log('');
-      this.printStatus();
+      console.log('  隧道连接已建立！');
       this.startStatusTimer();
     });
 
@@ -123,11 +123,11 @@ class TunnelClient {
 
         switch (msg.type) {
           case 'connected':
-            console.log(`✅ ${msg.message}`);
+            console.log(`  公网地址: http://${this.config.server}/${msg.tunnelCode}`);
+            console.log('');
             break;
 
           case 'ping':
-            // 响应心跳
             this.ws?.send(JSON.stringify({ type: 'pong' }));
             break;
 
@@ -136,22 +136,21 @@ class TunnelClient {
             break;
 
           case 'error':
-            console.error(`❌ 服务器错误: ${msg.message}`);
+            console.error(`  错误: ${msg.message}`);
             break;
         }
       } catch {
-        // 忽略非 JSON 消息
+        // 忽略
       }
     });
 
     this.ws.on('close', (code, reason) => {
-      console.log('');
-      console.log(`🔌 隧道连接已断开 (code: ${code}, reason: ${reason || 'unknown'})`);
+      console.log(`  连接断开 (code: ${code})`);
       this.scheduleReconnect();
     });
 
     this.ws.on('error', (err) => {
-      console.error(`❌ WebSocket 错误: ${err.message}`);
+      console.error(`  错误: ${err.message}`);
     });
   }
 
@@ -167,21 +166,17 @@ class TunnelClient {
       }
     }
 
-    const options = {
+    const req = http.request({
       hostname: this.config.localHost,
       port: this.config.localPort,
       path: msg.url,
       method: msg.method,
       headers: filteredHeaders,
-    };
-
-    const req = http.request(options, (res) => {
+    }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (chunk: Buffer) => chunks.push(chunk));
       res.on('end', () => {
         const bodyBuffer = Buffer.concat(chunks);
-
-        // 过滤响应头
         const respHeaders: Record<string, string> = {};
         const skipRespHeaders = ['transfer-encoding', 'connection'];
         for (const [key, value] of Object.entries(res.headers)) {
@@ -189,7 +184,6 @@ class TunnelClient {
             respHeaders[key] = value;
           }
         }
-
         this.ws?.send(JSON.stringify({
           type: 'response',
           id: msg.id,
@@ -197,7 +191,6 @@ class TunnelClient {
           headers: respHeaders,
           body: bodyBuffer.toString('base64'),
         }));
-
         this.requestCount++;
       });
     });
@@ -212,54 +205,37 @@ class TunnelClient {
       }));
     });
 
-    if (body) {
-      req.write(body);
-    }
+    if (body) req.write(body);
     req.end();
   }
 
   private scheduleReconnect() {
     if (this.reconnectTimer) return;
-
     const delay = Math.min(1000 * Math.pow(2, Math.random() * 3), 30000);
-    console.log(`⏳ ${Math.round(delay / 1000)}s 后尝试重新连接...`);
-
+    console.log(`  ${Math.round(delay / 1000)}s 后重连...`);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
     }, delay);
   }
 
-  private statusTimer: ReturnType<typeof setInterval> | null = null;
-
   private startStatusTimer() {
     if (this.statusTimer) clearInterval(this.statusTimer);
-    this.statusTimer = setInterval(() => this.printStatus(), 30000);
+    this.statusTimer = setInterval(() => this.printStatus(), 60000);
   }
 
   private printStatus() {
-    const uptime = Math.floor((Date.now() - this.startTime) / 1000);
-    const hours = Math.floor(uptime / 3600);
-    const minutes = Math.floor((uptime % 3600) / 60);
-    const seconds = uptime % 60;
-    const uptimeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-    console.log(`📊 运行时间: ${uptimeStr} | 已处理请求: ${this.requestCount}`);
+    const up = Math.floor((Date.now() - this.startTime) / 1000);
+    const h = Math.floor(up / 3600);
+    const m = Math.floor((up % 3600) / 60);
+    const s = up % 60;
+    console.log(`  [${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}] 请求: ${this.requestCount} | 公网: http://${this.config.server}/${this.config.key}`);
   }
 }
 
-// 启动客户端
 const config = parseArgs();
 const client = new TunnelClient(config);
 client.start();
 
-// 优雅关闭
-process.on('SIGINT', () => {
-  console.log('\n👋 正在关闭隧道连接...');
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  console.log('\n👋 正在关闭隧道连接...');
-  process.exit(0);
-});
+process.on('SIGINT', () => { console.log('\n  关闭连接...'); process.exit(0); });
+process.on('SIGTERM', () => { console.log('\n  关闭连接...'); process.exit(0); });

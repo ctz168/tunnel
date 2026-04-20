@@ -19,15 +19,20 @@ export async function GET() {
         serverStatus = statusData.status || {};
       }
     } catch {
-      // 隧道服务器不可用（开发模式或服务器未部署），使用数据库状态
+      // 隧道服务器不可用
     }
+
+    // 获取服务器配置
+    let serverConfig = await db.serverConfig.findFirst();
+    const serverDomain = serverConfig?.serverDomain || 'aicq.online:1018';
 
     const enrichedTunnels = tunnels.map((tunnel) => ({
       ...tunnel,
-      serverStatus: serverStatus[tunnel.subdomain] || null,
+      serverStatus: serverStatus[tunnel.tunnelCode] || null,
+      publicUrl: `http://${serverDomain}/${tunnel.tunnelCode}`,
     }));
 
-    return NextResponse.json({ tunnels: enrichedTunnels });
+    return NextResponse.json({ tunnels: enrichedTunnels, serverDomain });
   } catch (error) {
     return NextResponse.json(
       { error: '获取隧道列表失败', details: String(error) },
@@ -36,7 +41,17 @@ export async function GET() {
   }
 }
 
-// 生成随机认证 Token
+// 生成8位隧道密钥
+function generateTunnelCode(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 去掉容易混淆的 I O 0 1
+  let result = '';
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// 生成认证 Token
 function generateToken(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let result = '';
@@ -50,26 +65,15 @@ function generateToken(): string {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { name, subdomain, localPort, localHost, protocol, description, maxConn } = body;
+    const { name, localPort, localHost, description } = body;
 
-    // 验证必填字段
-    if (!name || !subdomain || !localPort) {
+    if (!name || !localPort) {
       return NextResponse.json(
-        { error: '缺少必填字段：name, subdomain, localPort' },
+        { error: '缺少必填字段：name, localPort' },
         { status: 400 }
       );
     }
 
-    // 验证子域名格式
-    const subdomainRegex = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-    if (!subdomainRegex.test(subdomain.toLowerCase())) {
-      return NextResponse.json(
-        { error: '子域名格式无效，只允许小写字母、数字和连字符' },
-        { status: 400 }
-      );
-    }
-
-    // 验证端口号
     const port = parseInt(localPort, 10);
     if (isNaN(port) || port < 1 || port > 65535) {
       return NextResponse.json(
@@ -78,34 +82,44 @@ export async function POST(request: Request) {
       );
     }
 
-    // 检查子域名是否已存在
-    const existing = await db.tunnel.findUnique({
-      where: { subdomain: subdomain.toLowerCase() },
-    });
+    // 生成唯一的8位隧道密钥
+    let tunnelCode = generateTunnelCode();
+    let attempts = 0;
+    while (await db.tunnel.findUnique({ where: { tunnelCode } }) && attempts < 100) {
+      tunnelCode = generateTunnelCode();
+      attempts++;
+    }
 
-    if (existing) {
+    if (attempts >= 100) {
       return NextResponse.json(
-        { error: `子域名 "${subdomain}" 已被使用` },
-        { status: 409 }
+        { error: '生成隧道密钥失败，请重试' },
+        { status: 500 }
       );
     }
 
-    // 创建隧道
+    // 获取服务器域名
+    let serverConfig = await db.serverConfig.findFirst();
+    const serverDomain = serverConfig?.serverDomain || 'aicq.online:1018';
+
     const tunnel = await db.tunnel.create({
       data: {
         name,
-        subdomain: subdomain.toLowerCase(),
+        tunnelCode,
         localPort: port,
         localHost: localHost || 'localhost',
-        protocol: protocol || 'http',
+        protocol: 'http',
         description: description || null,
-        maxConn: maxConn || 10,
+        maxConn: 10,
         authToken: generateToken(),
         status: 'offline',
       },
     });
 
-    return NextResponse.json({ tunnel }, { status: 201 });
+    return NextResponse.json({
+      tunnel,
+      publicUrl: `http://${serverDomain}/${tunnel.tunnelCode}`,
+      serverDomain,
+    }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
       { error: '创建隧道失败', details: String(error) },

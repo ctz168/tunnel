@@ -30,7 +30,7 @@ export async function GET(
       });
       if (statusRes.ok) {
         const statusData = await statusRes.json();
-        serverStatus = statusData.status?.[tunnel.subdomain] || null;
+        serverStatus = statusData.status?.[tunnel.tunnelCode] || null;
       }
     } catch {
       // 忽略

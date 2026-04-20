@@ -3,317 +3,140 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Plus,
-  Wifi,
-  WifiOff,
-  Globe,
-  Activity,
-  Trash2,
-  Copy,
-  Terminal,
-  ChevronRight,
-  ExternalLink,
-  RefreshCw,
-  Server,
-  Shield,
-  Zap,
-  ArrowUpDown,
-  Clock,
-  Hash,
-  Info,
-  X,
-  CheckCircle,
-  AlertCircle,
-  Loader2,
+  Plus, Wifi, WifiOff, Globe, Activity, Trash2, Copy, Settings,
+  ChevronRight, RefreshCw, Server, Shield, Zap, Hash, Info,
+  X, CheckCircle, AlertCircle, Loader2, Key, Link2, ExternalLink,
+  Monitor, Terminal,
 } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+} from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Textarea } from "@/components/ui/textarea";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-// Types
 interface Tunnel {
-  id: string;
-  name: string;
-  subdomain: string;
-  localPort: number;
-  localHost: string;
-  authToken: string;
-  protocol: string;
-  status: string;
-  maxConn: number;
-  description: string | null;
-  createdAt: string;
-  updatedAt: string;
-  serverStatus: {
-    online: boolean;
-    connectedAt?: string;
-    bytesIn?: number;
-    bytesOut?: number;
-    requestCount?: number;
-  } | null;
+  id: string; name: string; tunnelCode: string; localPort: number; localHost: string;
+  authToken: string; protocol: string; status: string; maxConn: number;
+  description: string | null; createdAt: string; updatedAt: string;
+  serverStatus: { online: boolean; connectedAt?: string; bytesIn?: number; bytesOut?: number; requestCount?: number; } | null;
+  publicUrl: string;
 }
 
-interface TunnelLog {
-  id: string;
-  tunnelId: string;
-  action: string;
-  message: string;
-  ip: string | null;
-  bytesIn: number;
-  bytesOut: number;
-  createdAt: string;
-}
+interface TunnelLog { id: string; tunnelId: string; action: string; message: string; ip: string | null; bytesIn: number; bytesOut: number; createdAt: string; }
 
-interface ServerStatus {
-  status: string;
-  tunnels: Tunnel[];
-}
+function formatBytes(b: number): string { if (b === 0) return "0 B"; const k = 1024, s = ["B","KB","MB","GB"], i = Math.floor(Math.log(b)/Math.log(k)); return parseFloat((b/Math.pow(k,i)).toFixed(1))+" "+s[i]; }
+function formatTime(d: string): string { return new Date(d).toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"}); }
+function timeAgo(d: string): string { const m=Math.floor((Date.now()-new Date(d).getTime())/60000); if(m<1)return"刚刚"; if(m<60)return`${m}分钟前`; const h=Math.floor(m/60); if(h<24)return`${h}小时前`; return`${Math.floor(h/24)}天前`; }
 
-// Utility
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-function formatTime(dateStr: string): string {
-  const date = new Date(dateStr);
-  return date.toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function timeAgo(dateStr: string): string {
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diff = now - then;
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  const days = Math.floor(hours / 24);
-  return `${days} 天前`;
-}
-
-// Toast helper
 function useToast() {
-  const [toasts, setToasts] = useState<{ id: string; message: string; type: "success" | "error" }[]>([]);
-
-  const addToast = useCallback((message: string, type: "success" | "error" = "success") => {
+  const [toasts, setToasts] = useState<{id:string;message:string;type:"success"|"error"}[]>([]);
+  const addToast = useCallback((message: string, type: "success"|"error" = "success") => {
     const id = Date.now().toString();
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3000);
+    setToasts(p => [...p, { id, message, type }]);
+    setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 3000);
   }, []);
-
   return { toasts, addToast };
 }
 
-// Main page component
 export default function DashboardPage() {
   const [tunnels, setTunnels] = useState<Tunnel[]>([]);
+  const [serverDomain, setServerDomain] = useState("aicq.online:1018");
   const [serverOnline, setServerOnline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedTunnel, setSelectedTunnel] = useState<Tunnel | null>(null);
   const [logs, setLogs] = useState<TunnelLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const { toasts, addToast } = useToast();
 
-  // Form state
+  // 创建表单
   const [formName, setFormName] = useState("");
-  const [formSubdomain, setFormSubdomain] = useState("");
   const [formPort, setFormPort] = useState("");
   const [formHost, setFormHost] = useState("localhost");
-  const [formProtocol, setFormProtocol] = useState("http");
   const [formDesc, setFormDesc] = useState("");
   const [creating, setCreating] = useState(false);
 
-  // Fetch tunnels
+  // 设置表单
+  const [settingsDomain, setSettingsDomain] = useState("aicq.online:1018");
+  const [savingSettings, setSavingSettings] = useState(false);
+
   const fetchTunnels = useCallback(async () => {
     try {
       const res = await fetch("/api/tunnels");
-      if (res.ok) {
-        const data = await res.json();
-        setTunnels(data.tunnels);
-      }
-    } catch {
-      // ignore
-    }
+      if (res.ok) { const d = await res.json(); setTunnels(d.tunnels); setServerDomain(d.serverDomain || "aicq.online:1018"); }
+    } catch { /* */ }
     try {
-      const statusRes = await fetch("/api/tunnel-status");
-      if (statusRes.ok) {
-        setServerOnline(true);
-      } else {
-        setServerOnline(false);
-      }
-    } catch {
-      setServerOnline(false);
-    }
+      const r = await fetch("/api/tunnel-status");
+      setServerOnline(r.ok);
+    } catch { setServerOnline(false); }
   }, []);
 
-  // Fetch logs for a tunnel
-  const fetchLogs = useCallback(async (tunnelId: string) => {
+  const fetchLogs = useCallback(async (id: string) => {
     setLogsLoading(true);
-    try {
-      const res = await fetch(`/api/tunnels/${tunnelId}/logs?limit=30`);
-      if (res.ok) {
-        const data = await res.json();
-        setLogs(data.logs);
-      }
-    } catch {
-      // ignore
-    }
+    try { const r = await fetch(`/api/tunnels/${id}/logs?limit=30`); if(r.ok) setLogs((await r.json()).logs); } catch { /* */ }
     setLogsLoading(false);
   }, []);
 
-  useEffect(() => {
-    const load = () => { fetchTunnels(); };
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, [fetchTunnels]);
+  useEffect(() => { const load = () => fetchTunnels(); load(); const iv = setInterval(load, 5000); return () => clearInterval(iv); }, [fetchTunnels]);
+  useEffect(() => { if (selectedTunnel) { const load = () => fetchLogs(selectedTunnel.id); load(); const iv = setInterval(load, 8000); return () => clearInterval(iv); } }, [selectedTunnel, fetchLogs]);
 
-  // Watch selected tunnel
-  useEffect(() => {
-    if (selectedTunnel) {
-      const loadLogs = () => { fetchLogs(selectedTunnel.id); };
-      loadLogs();
-      const logInterval = setInterval(loadLogs, 8000);
-      return () => clearInterval(logInterval);
-    }
-  }, [selectedTunnel, fetchLogs]);
-
-  // Create tunnel
   const handleCreate = async () => {
-    if (!formName || !formSubdomain || !formPort) {
-      addToast("请填写所有必填字段", "error");
-      return;
-    }
+    if (!formName || !formPort) { addToast("请填写隧道名称和本地端口", "error"); return; }
     setCreating(true);
     try {
-      const res = await fetch("/api/tunnels", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: formName,
-          subdomain: formSubdomain,
-          localPort: parseInt(formPort),
-          localHost: formHost,
-          protocol: formProtocol,
-          description: formDesc || null,
-        }),
-      });
-      if (res.ok) {
-        addToast("隧道创建成功！");
-        setCreateOpen(false);
-        resetForm();
-        fetchTunnels();
-      } else {
-        const data = await res.json();
-        addToast(data.error || "创建失败", "error");
-      }
-    } catch {
-      addToast("网络错误", "error");
-    }
+      const res = await fetch("/api/tunnels", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ name:formName, localPort:parseInt(formPort), localHost:formHost, description:formDesc||null }) });
+      if (res.ok) { addToast("隧道创建成功！"); setCreateOpen(false); resetForm(); fetchTunnels(); }
+      else { const d = await res.json(); addToast(d.error||"创建失败","error"); }
+    } catch { addToast("网络错误","error"); }
     setCreating(false);
   };
 
-  // Delete tunnel
-  const handleDelete = async (id: string) => {
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
     try {
-      const res = await fetch(`/api/tunnels/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        addToast("隧道已删除");
-        if (selectedTunnel?.id === id) setSelectedTunnel(null);
-        fetchTunnels();
-      } else {
-        addToast("删除失败", "error");
-      }
-    } catch {
-      addToast("网络错误", "error");
-    }
+      const res = await fetch("/api/config", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ serverDomain: settingsDomain }) });
+      if (res.ok) { addToast("服务器配置已更新"); setServerDomain(settingsDomain); setSettingsOpen(false); fetchTunnels(); }
+      else { const d = await res.json(); addToast(d.error||"保存失败","error"); }
+    } catch { addToast("网络错误","error"); }
+    setSavingSettings(false);
   };
 
-  // Copy to clipboard
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).then(
-      () => addToast("已复制到剪贴板"),
-      () => addToast("复制失败", "error")
-    );
+  const handleDelete = async (id: string) => {
+    try { const r = await fetch(`/api/tunnels/${id}`,{method:"DELETE"}); if(r.ok){addToast("隧道已删除"); if(selectedTunnel?.id===id) setSelectedTunnel(null); fetchTunnels();} else addToast("删除失败","error"); } catch { addToast("网络错误","error"); }
   };
 
-  const resetForm = () => {
-    setFormName("");
-    setFormSubdomain("");
-    setFormPort("");
-    setFormHost("localhost");
-    setFormProtocol("http");
-    setFormDesc("");
-  };
+  const copy = (text: string) => navigator.clipboard.writeText(text).then(()=>addToast("已复制"), ()=>addToast("复制失败","error"));
+  const resetForm = () => { setFormName(""); setFormPort(""); setFormHost("localhost"); setFormDesc(""); };
 
-  // Stats
-  const onlineCount = tunnels.filter((t) => {
-    if (t.serverStatus?.online) return true;
-    return false;
-  }).length;
-  const offlineCount = tunnels.length - onlineCount;
-  const totalBytesIn = tunnels.reduce((sum, t) => sum + (t.serverStatus?.bytesIn || 0), 0);
-  const totalBytesOut = tunnels.reduce((sum, t) => sum + (t.serverStatus?.bytesOut || 0), 0);
-  const totalRequests = tunnels.reduce((sum, t) => sum + (t.serverStatus?.requestCount || 0), 0);
+  const getClientCommand = (t: Tunnel) => `bun tunnel-client.ts --key ${t.tunnelCode} --port ${t.localPort}`;
+  const getPublicUrl = (t: Tunnel) => `http://${serverDomain}/${t.tunnelCode}`;
 
-  // Get client command
-  const getClientCommand = (tunnel: Tunnel) => {
-    return `bun tunnel-client.ts --server ws://your-server.com:3002 --token ${tunnel.authToken} --subdomain ${tunnel.subdomain} --local-port ${tunnel.localPort}`;
-  };
+  const onlineCount = tunnels.filter(t => t.serverStatus?.online).length;
+  const totalRequests = tunnels.reduce((s,t) => s + (t.serverStatus?.requestCount||0), 0);
+  const totalBytes = tunnels.reduce((s,t) => s + (t.serverStatus?.bytesIn||0) + (t.serverStatus?.bytesOut||0), 0);
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
-      {/* Toast notifications */}
+      {/* Toast */}
       <div className="fixed top-4 right-4 z-50 flex flex-col gap-2">
         <AnimatePresence>
-          {toasts.map((toast) => (
-            <motion.div
-              key={toast.id}
-              initial={{ opacity: 0, x: 100 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 100 }}
-              className="flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg border bg-white dark:bg-slate-800 text-sm"
-            >
-              {toast.type === "success" ? (
-                <CheckCircle className="h-4 w-4 text-emerald-500" />
-              ) : (
-                <AlertCircle className="h-4 w-4 text-red-500" />
-              )}
-              {toast.message}
+          {toasts.map(t => (
+            <motion.div key={t.id} initial={{opacity:0,x:100}} animate={{opacity:1,x:0}} exit={{opacity:0,x:100}}
+              className="flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg border bg-white dark:bg-slate-800 text-sm">
+              {t.type==="success" ? <CheckCircle className="h-4 w-4 text-emerald-500"/> : <AlertCircle className="h-4 w-4 text-red-500"/>}
+              {t.message}
             </motion.div>
           ))}
         </AnimatePresence>
@@ -322,317 +145,137 @@ export default function DashboardPage() {
       {/* Header */}
       <header className="sticky top-0 z-40 border-b bg-white/80 dark:bg-slate-900/80 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+          <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-md">
-                <Zap className="h-5 w-5 text-white" />
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-md">
+                <Zap className="h-4 w-4 text-white" />
               </div>
-              <div>
-                <h1 className="text-lg font-bold tracking-tight">TunnelNet</h1>
-                <p className="text-xs text-muted-foreground hidden sm:block">固定域名内网穿透</p>
+              <div className="flex items-center gap-2">
+                <h1 className="text-base font-bold tracking-tight">TunnelNet</h1>
+                <code className="hidden sm:inline text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{serverDomain}</code>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${serverOnline ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"}`}>
-                <div className={`w-2 h-2 rounded-full ${serverOnline ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
-                {serverOnline ? "服务器在线" : "服务器离线"}
-              </div>
+            <div className="flex items-center gap-2">
+              <Badge variant={serverOnline?"default":"secondary"} className={`text-xs gap-1 ${serverOnline?"bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900":""}`}>
+                <div className={`w-1.5 h-1.5 rounded-full ${serverOnline?"bg-emerald-500 animate-pulse":"bg-slate-400"}`}/>
+                {serverOnline?"在线":"离线"}
+              </Badge>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setSettingsDomain(serverDomain); setSettingsOpen(true); }}>
+                <Settings className="h-4 w-4" />
+              </Button>
               <Button variant="outline" size="sm" onClick={fetchTunnels} className="gap-1.5">
-                <RefreshCw className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">刷新</span>
+                <RefreshCw className="h-3 w-3" /><span className="hidden sm:inline">刷新</span>
               </Button>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Stats Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0 }}>
-            <Card className="border-0 shadow-sm bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-muted-foreground font-medium">在线隧道</p>
-                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{onlineCount}</p>
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5">
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          {[
+            { label:"在线隧道", value:onlineCount, icon:Wifi, color:"emerald", val:onlineCount },
+            { label:"数据流量", value:formatBytes(totalBytes), icon:Activity, color:"blue", val:totalBytes },
+            { label:"总请求", value:totalRequests.toString(), icon:Hash, color:"amber", val:totalRequests },
+          ].map((s,i) => (
+            <motion.div key={s.label} initial={{opacity:0,y:15}} animate={{opacity:1,y:0}} transition={{delay:i*0.05}}>
+              <Card className={`border-0 shadow-sm bg-gradient-to-br ${s.color==="emerald"?"from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30":s.color==="blue"?"from-blue-50 to-sky-50 dark:from-blue-950/30 dark:to-sky-950/30":"from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30"}`}>
+                <CardContent className="p-3 sm:p-4">
+                  <div className="flex items-center justify-between">
+                    <div><p className="text-xs text-muted-foreground font-medium">{s.label}</p><p className={`text-xl sm:text-2xl font-bold text-${s.color}-600 dark:text-${s.color}-400`}>{s.value}</p></div>
+                    <div className={`w-9 h-9 rounded-lg bg-${s.color}-100 dark:bg-${s.color}-900/50 flex items-center justify-center`}>
+                      <s.icon className={`h-4 w-4 text-${s.color}-600 dark:text-${s.color}-400`}/>
+                    </div>
                   </div>
-                  <div className="w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center">
-                    <Wifi className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
-            <Card className="border-0 shadow-sm bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900/30 dark:to-slate-800/30">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-muted-foreground font-medium">离线隧道</p>
-                    <p className="text-2xl font-bold text-slate-600 dark:text-slate-400">{offlineCount}</p>
-                  </div>
-                  <div className="w-10 h-10 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
-                    <WifiOff className="h-5 w-5 text-slate-500" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-            <Card className="border-0 shadow-sm bg-gradient-to-br from-blue-50 to-sky-50 dark:from-blue-950/30 dark:to-sky-950/30">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-muted-foreground font-medium">数据流量</p>
-                    <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{formatBytes(totalBytesIn + totalBytesOut)}</p>
-                  </div>
-                  <div className="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center">
-                    <Activity className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
-            <Card className="border-0 shadow-sm bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs text-muted-foreground font-medium">总请求数</p>
-                    <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">{totalRequests}</p>
-                  </div>
-                  <div className="w-10 h-10 rounded-lg bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center">
-                    <Hash className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </motion.div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          ))}
         </div>
 
-        {/* Quick Start Guide (when no tunnels) */}
+        {/* Empty State */}
         {tunnels.length === 0 && !loading && (
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-            <Card className="mb-6 border-0 shadow-sm">
-              <CardContent className="p-6">
-                <div className="flex flex-col items-center text-center py-8">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg mb-4">
-                    <Globe className="h-8 w-8 text-white" />
-                  </div>
-                  <h2 className="text-xl font-bold mb-2">开始使用 TunnelNet</h2>
-                  <p className="text-muted-foreground max-w-md mb-6">
-                    TunnelNet 是一个类似 ngrok 的内网穿透服务，但使用固定子域名。
-                    您可以为本地服务创建隧道，通过固定域名从外部访问。
-                  </p>
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    <Button onClick={() => setCreateOpen(true)} className="gap-2">
-                      <Plus className="h-4 w-4" />
-                      创建第一个隧道
-                    </Button>
-                  </div>
-                  <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-2xl text-left">
-                    <div className="flex gap-3 p-3 rounded-lg bg-muted/50">
-                      <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center shrink-0">
-                        <span className="text-emerald-600 dark:text-emerald-400 font-bold text-sm">1</span>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">创建隧道</p>
-                        <p className="text-xs text-muted-foreground">设置子域名和本地端口</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-3 p-3 rounded-lg bg-muted/50">
-                      <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center shrink-0">
-                        <span className="text-blue-600 dark:text-blue-400 font-bold text-sm">2</span>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">运行客户端</p>
-                        <p className="text-xs text-muted-foreground">在本地运行连接脚本</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-3 p-3 rounded-lg bg-muted/50">
-                      <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center shrink-0">
-                        <span className="text-amber-600 dark:text-amber-400 font-bold text-sm">3</span>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">公开访问</p>
-                        <p className="text-xs text-muted-foreground">通过固定域名访问服务</p>
-                      </div>
-                    </div>
-                  </div>
+          <motion.div initial={{opacity:0,y:20}} animate={{opacity:1,y:0}}>
+            <Card className="mb-5 border-0 shadow-sm">
+              <CardContent className="p-6 text-center py-10">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg mx-auto mb-4">
+                  <Globe className="h-7 w-7 text-white" />
+                </div>
+                <h2 className="text-lg font-bold mb-1">创建第一个隧道</h2>
+                <p className="text-sm text-muted-foreground mb-5 max-w-sm mx-auto">
+                  自动分配 8 位密钥，将内网服务映射到公网地址<br/>
+                  <code className="text-xs">http://{serverDomain}/<span className="text-emerald-600 font-semibold">XXXXXXXX</span></code>
+                </p>
+                <Button onClick={() => setCreateOpen(true)} className="gap-2"><Plus className="h-4 w-4"/>创建隧道</Button>
+                <div className="mt-6 flex justify-center gap-6 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1"><Key className="h-3 w-3"/>8位密钥</span>
+                  <span className="flex items-center gap-1"><Link2 className="h-3 w-3"/>固定地址</span>
+                  <span className="flex items-center gap-1"><Shield className="h-3 w-3"/>Token认证</span>
                 </div>
               </CardContent>
             </Card>
           </motion.div>
         )}
 
-        {/* Tunnel list + Detail panel */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Tunnel List */}
+        {/* List + Detail */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          {/* List */}
           <div className="lg:col-span-2">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-lg font-semibold">隧道列表</h2>
-                <p className="text-sm text-muted-foreground">管理所有内网穿透隧道</p>
-              </div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-base font-semibold">隧道列表</h2>
               <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-                <DialogTrigger asChild>
-                  <Button className="gap-2" size="sm">
-                    <Plus className="h-4 w-4" />
-                    新建隧道
-                  </Button>
-                </DialogTrigger>
+                <DialogTrigger asChild><Button className="gap-1.5" size="sm"><Plus className="h-3.5 w-3.5"/>新建</Button></DialogTrigger>
                 <DialogContent className="sm:max-w-md">
-                  <DialogHeader>
-                    <DialogTitle>创建新隧道</DialogTitle>
-                    <DialogDescription>设置子域名和本地服务端口，即可创建一条固定域名的内网穿透隧道。</DialogDescription>
-                  </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <div className="grid gap-2">
-                      <Label htmlFor="tunnel-name">隧道名称 *</Label>
-                      <Input
-                        id="tunnel-name"
-                        placeholder="例如: 我的网站"
-                        value={formName}
-                        onChange={(e) => setFormName(e.target.value)}
-                      />
+                  <DialogHeader><DialogTitle>创建隧道</DialogTitle><DialogDescription>自动分配 8 位公网密钥，将本地服务映射到公网。</DialogDescription></DialogHeader>
+                  <div className="grid gap-3 py-3">
+                    <div className="grid gap-1.5"><Label>隧道名称 *</Label><Input placeholder="例如: 我的网站" value={formName} onChange={e=>setFormName(e.target.value)}/></div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="grid gap-1.5"><Label>本地地址</Label><Input placeholder="localhost" value={formHost} onChange={e=>setFormHost(e.target.value)}/></div>
+                      <div className="grid gap-1.5"><Label>本地端口 *</Label><Input placeholder="8080" type="number" value={formPort} onChange={e=>setFormPort(e.target.value)}/></div>
                     </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="tunnel-subdomain">子域名 *</Label>
-                      <div className="flex items-center gap-1">
-                        <Input
-                          id="tunnel-subdomain"
-                          placeholder="myapp"
-                          value={formSubdomain}
-                          onChange={(e) => setFormSubdomain(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                          className="flex-1"
-                        />
-                        <span className="text-sm text-muted-foreground whitespace-nowrap">.tunnel.local</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">只允许小写字母、数字和连字符，创建后不可修改</p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="grid gap-2">
-                        <Label htmlFor="tunnel-host">本地地址</Label>
-                        <Input
-                          id="tunnel-host"
-                          placeholder="localhost"
-                          value={formHost}
-                          onChange={(e) => setFormHost(e.target.value)}
-                        />
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="tunnel-port">本地端口 *</Label>
-                        <Input
-                          id="tunnel-port"
-                          placeholder="8080"
-                          type="number"
-                          value={formPort}
-                          onChange={(e) => setFormPort(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>协议</Label>
-                      <Select value={formProtocol} onValueChange={setFormProtocol}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="http">HTTP</SelectItem>
-                          <SelectItem value="https">HTTPS</SelectItem>
-                          <SelectItem value="tcp">TCP</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="tunnel-desc">描述（可选）</Label>
-                      <Textarea
-                        id="tunnel-desc"
-                        placeholder="例如: 开发环境前端服务"
-                        value={formDesc}
-                        onChange={(e) => setFormDesc(e.target.value)}
-                        rows={2}
-                      />
-                    </div>
+                    <div className="grid gap-1.5"><Label>描述（可选）</Label><Textarea placeholder="例如: 开发环境前端" value={formDesc} onChange={e=>setFormDesc(e.target.value)} rows={2}/></div>
                   </div>
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => setCreateOpen(false)}>
-                      取消
-                    </Button>
-                    <Button onClick={handleCreate} disabled={creating} className="gap-2">
-                      {creating && <Loader2 className="h-4 w-4 animate-spin" />}
-                      创建隧道
-                    </Button>
+                    <Button variant="outline" onClick={()=>setCreateOpen(false)}>取消</Button>
+                    <Button onClick={handleCreate} disabled={creating} className="gap-2">{creating&&<Loader2 className="h-4 w-4 animate-spin"/>}创建</Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
             </div>
 
             {loading ? (
-              <div className="space-y-3">
-                {[1, 2, 3].map((i) => (
-                  <Card key={i} className="shadow-sm">
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <Skeleton className="h-10 w-10 rounded-lg" />
-                          <div className="space-y-2">
-                            <Skeleton className="h-4 w-32" />
-                            <Skeleton className="h-3 w-48" />
-                          </div>
-                        </div>
-                        <Skeleton className="h-6 w-16 rounded-full" />
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+              <div className="space-y-2">{[1,2].map(i=><Card key={i} className="shadow-sm"><CardContent className="p-4"><div className="flex items-center gap-3"><Skeleton className="h-9 w-9 rounded-lg"/><div className="space-y-1.5"><Skeleton className="h-3.5 w-28"/><Skeleton className="h-3 w-44"/></div></div></CardContent></Card>)}</div>
             ) : tunnels.length === 0 ? null : (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 <AnimatePresence>
-                  {tunnels.map((tunnel) => {
-                    const isOnline = tunnel.serverStatus?.online || false;
+                  {tunnels.map(tunnel => {
+                    const on = tunnel.serverStatus?.online || false;
                     return (
-                      <motion.div
-                        key={tunnel.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, x: -100 }}
-                        transition={{ duration: 0.2 }}
-                      >
-                        <Card
-                          className={`shadow-sm cursor-pointer transition-all hover:shadow-md ${selectedTunnel?.id === tunnel.id ? "ring-2 ring-emerald-500/50 border-emerald-200 dark:border-emerald-800" : "hover:border-slate-300 dark:hover:border-slate-600"}`}
-                          onClick={() => setSelectedTunnel(tunnel)}
-                        >
-                          <CardContent className="p-4">
+                      <motion.div key={tunnel.id} initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} exit={{opacity:0,x:-80}} transition={{duration:0.15}}>
+                        <Card className={`shadow-sm cursor-pointer transition-all hover:shadow-md ${selectedTunnel?.id===tunnel.id?"ring-2 ring-emerald-500/50 border-emerald-200 dark:border-emerald-800":"hover:border-slate-300 dark:hover:border-slate-600"}`}
+                          onClick={()=>setSelectedTunnel(tunnel)}>
+                          <CardContent className="p-3 sm:p-4">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3 min-w-0">
-                                <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${isOnline ? "bg-emerald-100 dark:bg-emerald-900/50" : "bg-slate-100 dark:bg-slate-800"}`}>
-                                  <Globe className={`h-5 w-5 ${isOnline ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400"}`} />
+                                <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${on?"bg-emerald-100 dark:bg-emerald-900/50":"bg-slate-100 dark:bg-slate-800"}`}>
+                                  <Globe className={`h-4 w-4 ${on?"text-emerald-600 dark:text-emerald-400":"text-slate-400"}`}/>
                                 </div>
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-2">
                                     <h3 className="font-semibold text-sm truncate">{tunnel.name}</h3>
-                                    <Badge variant={isOnline ? "default" : "secondary"} className={`text-xs px-2 py-0 ${isOnline ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900" : ""}`}>
-                                      <div className={`w-1.5 h-1.5 rounded-full mr-1 ${isOnline ? "bg-emerald-500" : "bg-slate-400"}`} />
-                                      {isOnline ? "在线" : "离线"}
+                                    <Badge variant={on?"default":"secondary"} className={`text-[10px] px-1.5 py-0 ${on?"bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900":""}`}>
+                                      <div className={`w-1 h-1 rounded-full mr-0.5 ${on?"bg-emerald-500":"bg-slate-400"}`}/>
+                                      {on?"在线":"离线"}
                                     </Badge>
                                   </div>
-                                  <p className="text-xs text-muted-foreground truncate">
-                                    {tunnel.subdomain}.tunnel.local → {tunnel.localHost}:{tunnel.localPort}
-                                  </p>
+                                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                    <code className="bg-muted px-1 py-0 rounded font-mono text-[11px]">{tunnel.tunnelCode}</code>
+                                    <span className="hidden sm:inline">→ {tunnel.localHost}:{tunnel.localPort}</span>
+                                  </div>
                                 </div>
                               </div>
-                              <div className="flex items-center gap-2 shrink-0 ml-2">
-                                {isOnline && tunnel.serverStatus?.requestCount !== undefined && (
-                                  <span className="text-xs text-muted-foreground hidden sm:inline">
-                                    {tunnel.serverStatus.requestCount} 请求
-                                  </span>
-                                )}
-                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                              </div>
+                              <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 ml-2"/>
                             </div>
                           </CardContent>
                         </Card>
@@ -644,203 +287,119 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Detail Panel */}
+          {/* Detail */}
           <div className="lg:col-span-1">
-            <div className="sticky top-20">
+            <div className="sticky top-16">
               {selectedTunnel ? (
-                <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}>
+                <motion.div initial={{opacity:0,x:15}} animate={{opacity:1,x:0}}>
                   <Card className="shadow-sm">
-                    <CardHeader className="pb-3">
+                    <CardHeader className="pb-2 px-4 pt-4">
                       <div className="flex items-center justify-between">
-                        <CardTitle className="text-base">隧道详情</CardTitle>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => setSelectedTunnel(null)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
+                        <CardTitle className="text-sm">隧道详情</CardTitle>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={()=>setSelectedTunnel(null)}><X className="h-3.5 w-3.5"/></Button>
                       </div>
                     </CardHeader>
-                    <CardContent className="space-y-4">
-                      {/* Status badge */}
-                      <div className={`p-3 rounded-lg ${selectedTunnel.serverStatus?.online ? "bg-emerald-50 dark:bg-emerald-950/30" : "bg-slate-50 dark:bg-slate-900/50"}`}>
+                    <CardContent className="space-y-3 px-4 pb-4">
+                      {/* Status */}
+                      <div className={`p-2.5 rounded-lg text-sm ${selectedTunnel.serverStatus?.online?"bg-emerald-50 dark:bg-emerald-950/30":"bg-slate-50 dark:bg-slate-900/50"}`}>
                         <div className="flex items-center gap-2">
-                          {selectedTunnel.serverStatus?.online ? (
-                            <CheckCircle className="h-5 w-5 text-emerald-500" />
-                          ) : (
-                            <AlertCircle className="h-5 w-5 text-slate-400" />
-                          )}
-                          <div>
-                            <p className={`text-sm font-medium ${selectedTunnel.serverStatus?.online ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground"}`}>
-                              {selectedTunnel.serverStatus?.online ? "隧道运行中" : "隧道离线"}
-                            </p>
-                            {selectedTunnel.serverStatus?.connectedAt && (
-                              <p className="text-xs text-muted-foreground">
-                                连接于 {timeAgo(selectedTunnel.serverStatus.connectedAt)}
-                              </p>
-                            )}
-                          </div>
+                          {selectedTunnel.serverStatus?.online ? <CheckCircle className="h-4 w-4 text-emerald-500"/> : <AlertCircle className="h-4 w-4 text-slate-400"/>}
+                          <span className={selectedTunnel.serverStatus?.online?"text-emerald-700 dark:text-emerald-300":"text-muted-foreground"}>
+                            {selectedTunnel.serverStatus?.online?"隧道运行中":"隧道离线"}
+                          </span>
+                          {selectedTunnel.serverStatus?.connectedAt && <span className="text-xs text-muted-foreground ml-auto">{timeAgo(selectedTunnel.serverStatus.connectedAt)}</span>}
                         </div>
                       </div>
 
-                      {/* Info grid */}
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">名称</span>
-                          <span className="font-medium">{selectedTunnel.name}</span>
-                        </div>
-                        <Separator />
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">子域名</span>
-                          <div className="flex items-center gap-1">
-                            <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{selectedTunnel.subdomain}.tunnel.local</code>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() => copyToClipboard(`${selectedTunnel.subdomain}.tunnel.local`)}
-                            >
-                              <Copy className="h-3 w-3" />
-                            </Button>
+                      {/* Public URL */}
+                      <div className="space-y-1">
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">公网地址</p>
+                        <div className="relative">
+                          <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-lg p-2.5 flex items-center gap-2">
+                            <Globe className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0"/>
+                            <code className="text-xs text-emerald-700 dark:text-emerald-300 font-mono break-all">{getPublicUrl(selectedTunnel)}</code>
                           </div>
-                        </div>
-                        <Separator />
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">本地地址</span>
-                          <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{selectedTunnel.localHost}:{selectedTunnel.localPort}</code>
-                        </div>
-                        <Separator />
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">协议</span>
-                          <Badge variant="outline" className="text-xs">{selectedTunnel.protocol.toUpperCase()}</Badge>
-                        </div>
-                        <Separator />
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-muted-foreground">创建时间</span>
-                          <span className="text-xs">{formatTime(selectedTunnel.createdAt)}</span>
+                          <Button variant="ghost" size="icon" className="absolute top-1.5 right-1.5 h-6 w-6 text-slate-400 hover:text-emerald-600" onClick={()=>copy(getPublicUrl(selectedTunnel))}><Copy className="h-3 w-3"/></Button>
                         </div>
                       </div>
 
-                      {/* Traffic stats */}
+                      {/* Info */}
+                      <div className="space-y-2 text-xs">
+                        <div className="flex justify-between"><span className="text-muted-foreground">名称</span><span className="font-medium">{selectedTunnel.name}</span></div>
+                        <Separator/>
+                        <div className="flex justify-between items-center"><span className="text-muted-foreground">密钥</span><code className="bg-muted px-1.5 py-0.5 rounded font-mono font-bold tracking-wider">{selectedTunnel.tunnelCode}</code></div>
+                        <Separator/>
+                        <div className="flex justify-between"><span className="text-muted-foreground">本地地址</span><code className="bg-muted px-1.5 py-0.5 rounded">{selectedTunnel.localHost}:{selectedTunnel.localPort}</code></div>
+                        <Separator/>
+                        <div className="flex justify-between"><span className="text-muted-foreground">创建时间</span><span>{formatTime(selectedTunnel.createdAt)}</span></div>
+                      </div>
+
+                      {/* Traffic */}
                       {selectedTunnel.serverStatus?.online && (
-                        <div className="space-y-2">
+                        <div className="space-y-1.5">
                           <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">实时流量</p>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 text-center">
-                              <p className="text-xs text-muted-foreground">入站</p>
-                              <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">{formatBytes(selectedTunnel.serverStatus.bytesIn || 0)}</p>
+                          <div className="grid grid-cols-3 gap-1.5">
+                            <div className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/30 text-center">
+                              <p className="text-[10px] text-muted-foreground">入站</p>
+                              <p className="text-xs font-semibold text-blue-600 dark:text-blue-400">{formatBytes(selectedTunnel.serverStatus.bytesIn||0)}</p>
                             </div>
-                            <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 text-center">
-                              <p className="text-xs text-muted-foreground">出站</p>
-                              <p className="text-sm font-semibold text-emerald-600 dark:text-emerald-400">{formatBytes(selectedTunnel.serverStatus.bytesOut || 0)}</p>
+                            <div className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 text-center">
+                              <p className="text-[10px] text-muted-foreground">出站</p>
+                              <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">{formatBytes(selectedTunnel.serverStatus.bytesOut||0)}</p>
+                            </div>
+                            <div className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 text-center">
+                              <p className="text-[10px] text-muted-foreground">请求</p>
+                              <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">{selectedTunnel.serverStatus.requestCount||0}</p>
                             </div>
                           </div>
                         </div>
                       )}
 
-                      {/* Connection command */}
-                      <div className="space-y-2">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">连接命令</p>
+                      {/* Client Command */}
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">客户端命令</p>
                         <div className="relative">
-                          <div className="bg-slate-900 dark:bg-slate-950 rounded-lg p-3 overflow-x-auto">
-                            <code className="text-xs text-emerald-400 font-mono whitespace-nowrap">
-                              {getClientCommand(selectedTunnel)}
-                            </code>
+                          <div className="bg-slate-900 dark:bg-slate-950 rounded-lg p-2.5 overflow-x-auto">
+                            <code className="text-[11px] text-emerald-400 font-mono whitespace-nowrap">{getClientCommand(selectedTunnel)}</code>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="absolute top-2 right-2 h-6 w-6 text-slate-400 hover:text-white"
-                            onClick={() => copyToClipboard(getClientCommand(selectedTunnel))}
-                          >
-                            <Copy className="h-3 w-3" />
-                          </Button>
+                          <Button variant="ghost" size="icon" className="absolute top-1.5 right-1.5 h-6 w-6 text-slate-400 hover:text-white" onClick={()=>copy(getClientCommand(selectedTunnel))}><Copy className="h-3 w-3"/></Button>
                         </div>
                       </div>
 
                       {/* Actions */}
                       <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          className="flex-1 gap-2"
-                          size="sm"
-                          onClick={() => copyToClipboard(selectedTunnel.authToken)}
-                        >
-                          <Shield className="h-3.5 w-3.5" />
-                          复制 Token
-                        </Button>
+                        <Button variant="outline" className="flex-1 gap-1.5" size="sm" onClick={()=>copy(selectedTunnel.authToken)}><Shield className="h-3 w-3"/>复制Token</Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
-                            <Button variant="outline" className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30" size="sm">
-                              <Trash2 className="h-3.5 w-3.5" />
-                              删除
-                            </Button>
+                            <Button variant="outline" className="gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30" size="sm"><Trash2 className="h-3 w-3"/>删除</Button>
                           </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>确认删除</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                确定要删除隧道「{selectedTunnel.name}」吗？此操作不可撤销。
-                                如果客户端正在运行，连接将会断开。
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>取消</AlertDialogCancel>
-                              <AlertDialogAction
-                                className="bg-red-600 hover:bg-red-700"
-                                onClick={() => handleDelete(selectedTunnel.id)}
-                              >
-                                确认删除
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
+                          <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>确认删除</AlertDialogTitle><AlertDialogDescription>确定删除「{selectedTunnel.name}」？客户端将断开连接。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={()=>handleDelete(selectedTunnel.id)}>删除</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
                         </AlertDialog>
                       </div>
 
                       {/* Logs */}
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
-                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">连接日志</p>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 text-xs gap-1"
-                            onClick={() => fetchLogs(selectedTunnel.id)}
-                          >
-                            <RefreshCw className={`h-3 w-3 ${logsLoading ? "animate-spin" : ""}`} />
-                            刷新
-                          </Button>
+                          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">日志</p>
+                          <Button variant="ghost" size="sm" className="h-5 text-[10px] gap-1 px-1.5" onClick={()=>fetchLogs(selectedTunnel.id)}><RefreshCw className={logsLoading ? "h-2.5 w-2.5 animate-spin" : "h-2.5 w-2.5"}></RefreshCw></Button>
                         </div>
-                        <ScrollArea className="h-48 rounded-lg border bg-slate-50 dark:bg-slate-900/50">
-                          <div className="p-2 space-y-1">
+                        <ScrollArea className="h-36 rounded-lg border bg-slate-50 dark:bg-slate-900/50">
+                          <div className="p-1.5 space-y-0.5">
                             {logsLoading && logs.length === 0 ? (
-                              <div className="space-y-2 p-2">
-                                {[1, 2, 3, 4, 5].map((i) => (
-                                  <Skeleton key={i} className="h-4 w-full" />
-                                ))}
-                              </div>
+                              <div className="space-y-1.5 p-1">{[1,2,3].map(i => <Skeleton key={i} className="h-3 w-full"/>)}</div>
                             ) : logs.length === 0 ? (
-                              <p className="text-xs text-muted-foreground text-center py-4">暂无日志</p>
+                              <p className="text-xs text-muted-foreground text-center py-3">暂无日志</p>
                             ) : (
-                              logs.map((log) => (
-                                <div key={log.id} className="flex items-start gap-2 px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
-                                  <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
-                                    log.action === "connect" ? "bg-emerald-500" :
-                                    log.action === "disconnect" ? "bg-red-500" :
-                                    log.action === "request" ? "bg-blue-500" :
-                                    log.action === "error" ? "bg-amber-500" :
-                                    "bg-slate-400"
-                                  }`} />
-                                  <div className="min-w-0">
-                                    <p className="text-xs text-muted-foreground break-all">{log.message}</p>
-                                    <p className="text-xs text-muted-foreground/60">{formatTime(log.createdAt)}</p>
+                              logs.map(l => {
+                                const dotColor = l.action === "connect" ? "bg-emerald-500" : l.action === "disconnect" ? "bg-red-500" : l.action === "request" ? "bg-blue-500" : l.action === "error" ? "bg-amber-500" : "bg-slate-400";
+                                const dotCls = "w-1 h-1 rounded-full mt-1.5 shrink-0 " + dotColor;
+                                return (
+                                  <div key={l.id} className="flex items-start gap-1.5 px-1.5 py-0.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
+                                    <div className={dotCls}></div>
+                                    <div className="min-w-0"><p className="text-[11px] text-muted-foreground break-all">{l.message}</p><p className="text-[10px] text-muted-foreground/50">{formatTime(l.createdAt)}</p></div>
                                   </div>
-                                </div>
-                              ))
+                                );
+                              })
                             )}
                           </div>
                         </ScrollArea>
@@ -849,50 +408,29 @@ export default function DashboardPage() {
                   </Card>
                 </motion.div>
               ) : (
-                <Card className="shadow-sm">
-                  <CardContent className="p-6">
-                    <div className="text-center py-8">
-                      <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center mx-auto mb-3">
-                        <Info className="h-6 w-6 text-muted-foreground" />
-                      </div>
-                      <p className="text-sm text-muted-foreground">选择一个隧道查看详情</p>
-                    </div>
-                  </CardContent>
-                </Card>
+                <Card className="shadow-sm"><CardContent className="p-5"><div className="text-center py-6"><div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center mx-auto mb-2"><Info className="h-5 w-5 text-muted-foreground"/></div><p className="text-xs text-muted-foreground">选择隧道查看详情</p></div></CardContent></Card>
               )}
             </div>
           </div>
         </div>
 
-        {/* Architecture info */}
-        <div className="mt-8 mb-4">
+        {/* Quick Start */}
+        <div className="mt-6">
           <Card className="shadow-sm border-0 bg-gradient-to-r from-slate-50 to-slate-100 dark:from-slate-900/30 dark:to-slate-800/30">
-            <CardContent className="p-6">
-              <div className="flex items-start gap-4">
-                <div className="w-10 h-10 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0">
-                  <Server className="h-5 w-5 text-slate-600 dark:text-slate-300" />
-                </div>
-                <div className="space-y-3 flex-1">
-                  <div>
-                    <h3 className="font-semibold">工作原理</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      TunnelNet 通过 WebSocket 在公网服务器和本地客户端之间建立加密隧道。
-                      与 ngrok 不同，TunnelNet 使用固定子域名，无需每次重新分享链接地址。
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-xs">
-                    <Badge variant="outline" className="gap-1">
-                      <Globe className="h-3 w-3" /> 固定子域名
-                    </Badge>
-                    <Badge variant="outline" className="gap-1">
-                      <Shield className="h-3 w-3" /> Token 认证
-                    </Badge>
-                    <Badge variant="outline" className="gap-1">
-                      <Zap className="h-3 w-3" /> WebSocket 隧道
-                    </Badge>
-                    <Badge variant="outline" className="gap-1">
-                      <Activity className="h-3 w-3" /> 实时监控
-                    </Badge>
+            <CardContent className="p-5">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-lg bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0"><Server className="h-4 w-4 text-slate-600 dark:text-slate-300"/></div>
+                <div className="space-y-2 flex-1">
+                  <h3 className="text-sm font-semibold">快速开始</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="bg-white/60 dark:bg-slate-800/60 rounded-lg p-3 border">
+                      <div className="flex items-center gap-1.5 mb-1.5 font-medium text-emerald-700 dark:text-emerald-400"><Monitor className="h-3 w-3"/>服务端部署</div>
+                      <code className="text-[11px] text-muted-foreground block bg-slate-900 text-emerald-400 rounded px-2 py-1 mt-1 font-mono">curl -fsSL https://get.tunnelnet.sh | bash</code>
+                    </div>
+                    <div className="bg-white/60 dark:bg-slate-800/60 rounded-lg p-3 border">
+                      <div className="flex items-center gap-1.5 mb-1.5 font-medium text-blue-700 dark:text-blue-400"><Terminal className="h-3 w-3"/>客户端运行</div>
+                      <code className="text-[11px] text-muted-foreground block bg-slate-900 text-emerald-400 rounded px-2 py-1 mt-1 font-mono">bun tunnel-client.ts --key XXXXXXXX --port 8080</code>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -901,14 +439,26 @@ export default function DashboardPage() {
         </div>
       </main>
 
+      {/* Settings Dialog */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle><Settings className="h-4 w-4 inline mr-2"/>服务器设置</DialogTitle><DialogDescription>配置隧道服务器的公网域名和端口，默认 aicq.online:1018。</DialogDescription></DialogHeader>
+          <div className="grid gap-3 py-3">
+            <div className="grid gap-1.5">
+              <Label>服务器域名</Label>
+              <Input placeholder="aicq.online:1018" value={settingsDomain} onChange={e=>setSettingsDomain(e.target.value)}/>
+              <p className="text-xs text-muted-foreground">客户端将通过此域名访问隧道，格式: 域名:端口</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={()=>setSettingsOpen(false)}>取消</Button>
+            <Button onClick={handleSaveSettings} disabled={savingSettings} className="gap-2">{savingSettings&&<Loader2 className="h-4 w-4 animate-spin"/>}保存</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Footer */}
-      <footer className="border-t py-4 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <p className="text-xs text-muted-foreground text-center">
-            TunnelNet - 固定域名内网穿透服务 | 基于 WebSocket 隧道技术
-          </p>
-        </div>
-      </footer>
+      <footer className="border-t py-3 mt-auto"><div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"><p className="text-[11px] text-muted-foreground text-center">TunnelNet - 内网穿透服务 | http://<span className="font-mono">{serverDomain}</span>/<span className="font-mono">8位密钥</span></p></div></footer>
     </div>
   );
 }
