@@ -31,7 +31,7 @@ const pendingRequests = new Map<string, (msg: any) => void>();
 
 async function getServerDomain(): Promise<string> {
   const config = await prisma.serverConfig.findFirst();
-  return config?.serverDomain || 'aicq.online:1018';
+  return config?.serverDomain || 'aicq.online:7739';
 }
 
 function log(tunnelId: string, action: string, message: string, ip?: string, bytesIn = 0, bytesOut = 0) {

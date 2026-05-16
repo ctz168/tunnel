@@ -2,24 +2,25 @@
 # ============================================================
 #  TunnelNet Server - 一键安装部署脚本
 #  适用: Linux / macOS / WSL
-#  用法: bash install-server.sh [端口]
-#  示例: bash install-server.sh 1018
+#  用法: bash install-server.sh
 # ============================================================
 set -e
 
-PORT="${1:-1018}"
-TUNNEL_PORT="${2:-3002}"
+DOMAIN="aicq.online"
+PORT="7739"
+TUNNEL_PORT="3002"
 INSTALL_DIR="$HOME/tunnelnet"
-REPO_URL="https://github.com/yourname/tunnelnet.git"
+REPO_URL="https://github.com/ctz168/tunnel.git"
 
 echo ""
 echo "  ╔══════════════════════════════════════════════╗"
 echo "  ║      TunnelNet Server 一键安装部署           ║"
+echo "  ║      域名: ${DOMAIN}:${PORT}                  ║"
 echo "  ╚══════════════════════════════════════════════╝"
 echo ""
-echo "  Dashboard 端口: $PORT"
-echo "  Tunnel 端口:    $TUNNEL_PORT"
-echo "  安装目录:       $INSTALL_DIR"
+echo "  公网域名:    ${DOMAIN}:${PORT}"
+echo "  Tunnel 端口: ${TUNNEL_PORT}"
+echo "  安装目录:    ${INSTALL_DIR}"
 echo ""
 
 # ---- 检测系统 ----
@@ -96,15 +97,8 @@ if [ -d "$INSTALL_DIR" ]; then
   cd "$INSTALL_DIR"
   git pull 2>/dev/null || true
 else
-  # 如果有 git 仓库，则克隆；否则创建空项目
-  if command -v git &>/dev/null && git ls-remote "$REPO_URL" &>/dev/null 2>&1; then
-    git clone "$REPO_URL" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-  else
-    mkdir -p "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-    echo "  [提示] 请将项目文件复制到 $INSTALL_DIR"
-  fi
+  git clone "$REPO_URL" "$INSTALL_DIR"
+  cd "$INSTALL_DIR"
 fi
 
 # ---- 安装 Node 依赖 ----
@@ -130,30 +124,31 @@ fi
 echo "  [6/6] 启动服务..."
 
 # 写入启动脚本
-cat > "$INSTALL_DIR/start.sh" << 'STARTSCRIPT'
+cat > "$INSTALL_DIR/start.sh" << STARTSCRIPT
 #!/bin/bash
 # TunnelNet 启动脚本
-cd "$(dirname "$0")"
+cd "\$(dirname "\$0")"
 
 export DATABASE_URL="file:db/custom.db"
-export TUNNEL_PORT="${TUNNEL_PORT:-3002}"
+export TUNNEL_PORT="${TUNNEL_PORT}"
 
 # 启动隧道服务（后台）
 cd mini-services/tunnel-server
 DATABASE_URL="file:../../db/custom.db" bun index.ts &
-TUNNEL_PID=$!
+TUNNEL_PID=\$!
 cd ..
 
 # 启动 Dashboard（前台）
 echo ""
 echo "  TunnelNet 已启动"
-echo "  隧道服务 PID: $TUNNEL_PID"
+echo "  隧道服务 PID: \$TUNNEL_PID"
+echo "  公网地址: http://${DOMAIN}:${PORT}"
 echo ""
 
 bun run dev
 
 # 清理
-kill $TUNNEL_PID 2>/dev/null
+kill \$TUNNEL_PID 2>/dev/null
 STARTSCRIPT
 
 chmod +x "$INSTALL_DIR/start.sh"
@@ -170,12 +165,6 @@ echo "  或手动分别启动:"
 echo "    终端1: cd $INSTALL_DIR/mini-services/tunnel-server && DATABASE_URL=file:../../db/custom.db bun index.ts"
 echo "    终端2: cd $INSTALL_DIR && bun run dev"
 echo ""
-echo "  访问管理面板: http://localhost:$PORT"
+echo "  访问管理面板: http://${DOMAIN}:${PORT}"
+echo "  隧道服务端口: ${TUNNEL_PORT}"
 echo ""
-
-# 可选：自动打开浏览器
-if [[ "$OS" == "macos" ]]; then
-  open "http://localhost:$PORT" 2>/dev/null || true
-elif [[ "$OS" == "linux" ]] && command -v xdg-open &>/dev/null; then
-  xdg-open "http://localhost:$PORT" 2>/dev/null || true
-fi

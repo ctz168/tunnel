@@ -9,7 +9,7 @@ datasource db {
 
 model ServerConfig {
   id          String   @id @default(cuid())
-  serverDomain String  @default("aicq.online:1018")
+  serverDomain String  @default("aicq.online:7739")
   updatedAt   DateTime @updatedAt
 }
 

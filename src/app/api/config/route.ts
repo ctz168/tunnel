@@ -7,7 +7,7 @@ export async function GET() {
     let config = await db.serverConfig.findFirst();
     if (!config) {
       config = await db.serverConfig.create({
-        data: { serverDomain: 'aicq.online:1018' },
+        data: { serverDomain: 'aicq.online:7739' },
       });
     }
     return NextResponse.json({

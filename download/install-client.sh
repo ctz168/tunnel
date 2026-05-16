@@ -51,7 +51,6 @@ bun install
 
 # 下载/更新客户端脚本
 if [ ! -f "tunnelnet" ]; then
-  # 从服务端下载或使用内嵌方式
   cat > tunnelnet << 'CLIENTSCRIPT'
 #!/usr/bin/env bun
 /**
@@ -71,11 +70,11 @@ function parseArgs(): ClientConfig {
       case '--key': case '-k': cfg.key = args[++i]; break;
       case '--port': case '-p': cfg.localPort = parseInt(args[++i], 10); break;
       case '--host': case '-h': cfg.localHost = args[++i]; break;
-      case '--help': console.log('\n  TunnelNet Client v1.0\n  用法: tunnelnet --key <8位密钥> --port <端口>\n  参数: -k 密钥(必填) -p 端口(必填) -s 服务器(默认: aicq.online:1018) -h 本地地址(默认: localhost)\n'); process.exit(0);
+      case '--help': console.log('\n  TunnelNet Client v1.0\n  用法: tunnelnet --key <8位密钥> --port <端口>\n  参数: -k 密钥(必填) -p 端口(必填) -s 服务器(默认: aicq.online:7739) -h 本地地址(默认: localhost)\n'); process.exit(0);
     }
   }
   if (!cfg.key || !cfg.localPort) { console.error('\n  用法: tunnelnet --key <8位密钥> --port <端口>\n  运行 tunnelnet --help 查看帮助\n'); process.exit(1); }
-  return { server: cfg.server || 'aicq.online:1018', key: cfg.key!.toUpperCase().trim(), localPort: cfg.localPort!, localHost: cfg.localHost || 'localhost' };
+  return { server: cfg.server || 'aicq.online:7739', key: cfg.key!.toUpperCase().trim(), localPort: cfg.localPort!, localHost: cfg.localHost || 'localhost' };
 }
 
 class TunnelClient {
@@ -159,6 +158,6 @@ echo "    tunnelnet --key <8位密钥> --port <本地端口>"
 echo ""
 echo "  示例:"
 echo "    tunnelnet --key ABCD1234 --port 8080"
-echo "    tunnelnet -k ABCD1234 -p 8080 -s aicq.online:1018"
+echo "    tunnelnet -k ABCD1234 -p 8080 -s aicq.online:7739"
 echo "    tunnelnet -k ABCD1234 -p 3000 -h 192.168.1.100"
 echo ""
