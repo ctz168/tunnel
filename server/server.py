@@ -1,0 +1,678 @@
+"""
+TunnelNet Server - 基于 aiohttp 的内网穿透服务端
+类似 ngrok，用户可通过固定域名 (默认 aicq.online:7739) 将本地服务暴露到公网
+"""
+import os
+import re
+import json
+import asyncio
+import base64
+import uuid
+from datetime import datetime, timezone
+
+from aiohttp import web
+import aiosqlite
+from jinja2 import Environment, FileSystemLoader
+
+# 导入数据库模块
+import db as tunnel_db
+
+# ======================== 配置 ========================
+DB_PATH = os.environ.get("DB_PATH", "data/tunnel.db")
+SERVER_PORT = int(os.environ.get("SERVER_PORT", "7739"))
+
+# ======================== 全局状态 ========================
+# 活跃的 WebSocket 隧道连接：code -> WebSocket
+active_tunnels: dict[str, web.WebSocketResponse] = {}
+
+# WebSocket 连接的隧道元信息：code -> {"tunnel_id": ..., "tunnel_name": ...}
+tunnel_ws_info: dict[str, dict] = {}
+
+# 隧道运行时统计：code -> {connected_at, bytes_in, bytes_out, request_count}
+tunnel_meta: dict[str, dict] = {}
+
+# 待处理的隧道请求 Future：request_id -> asyncio.Future
+pending_requests: dict[str, asyncio.Future] = {}
+
+# 全局数据库连接
+_db: aiosqlite.Connection | None = None
+
+# Jinja2 模板环境（延迟初始化）
+_template_env: Environment | None = None
+
+# 隧道编码正则：8 位大写字母 + 数字（至少含一个字母）
+CODE_RE = re.compile(r"^[A-Z0-9]{8}$")
+
+# 不允许转发到客户端的 hop-by-hop 请求头
+_HOP_BY_HOP = frozenset({
+    "host", "connection", "keep-alive", "proxy-authenticate",
+    "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
+})
+
+
+# ======================== 工具函数 ========================
+
+def _get_db() -> aiosqlite.Connection:
+    """获取全局数据库连接，若未初始化则抛出断言错误"""
+    assert _db is not None, "数据库连接尚未初始化"
+    return _db
+
+
+def _get_template_env() -> Environment:
+    """获取 Jinja2 模板环境（懒加载，仅初始化一次）"""
+    global _template_env
+    if _template_env is None:
+        tpl_dir = os.path.join(os.path.dirname(__file__), "templates")
+        _template_env = Environment(
+            loader=FileSystemLoader(tpl_dir),
+            autoescape=True,
+        )
+    return _template_env
+
+
+async def _get_server_domain() -> str:
+    """从数据库读取当前服务器域名"""
+    config = await tunnel_db.get_config(_get_db())
+    return config.get("domain", "aicq.online:7739")
+
+
+def _validate_domain(domain: str) -> tuple[bool, str]:
+    """
+    验证域名格式是否合法
+    返回 (是否合法, 错误信息)
+    """
+    if not domain or not isinstance(domain, str):
+        return False, "域名不能为空"
+    if len(domain) > 253:
+        return False, "域名长度不能超过 253 个字符"
+
+    # 分离 host 和 port
+    if ":" in domain:
+        parts = domain.rsplit(":", 1)
+        host, port = parts[0], parts[1]
+        if not port.isdigit() or not (1 <= int(port) <= 65535):
+            return False, "端口号无效，需为 1-65535"
+    else:
+        host = domain
+
+    # 基本域名格式检查
+    if "." not in host:
+        return False, "域名必须包含至少一个点号 (.)"
+    if not re.match(r"^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$", host):
+        return False, "域名包含非法字符"
+
+    return True, ""
+
+
+def _now_iso() -> str:
+    """返回当前 UTC 时间的 ISO 格式字符串"""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# 默认说明页 HTML（当路径不匹配隧道编码时展示）
+_DEFAULT_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TunnelNet - 内网穿透服务</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .card { background: #1e293b; border-radius: 16px; padding: 48px; max-width: 560px; width: 90%; box-shadow: 0 25px 50px rgba(0,0,0,.4); }
+  h1 { font-size: 28px; margin-bottom: 8px; }
+  .subtitle { color: #94a3b8; margin-bottom: 24px; }
+  .code-box { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 14px; margin: 16px 0; word-break: break-all; color: #38bdf8; }
+  .steps { margin-top: 24px; }
+  .steps h3 { color: #38bdf8; margin-bottom: 12px; }
+  .steps ol { padding-left: 20px; color: #cbd5e1; line-height: 2; }
+  .footer { margin-top: 32px; text-align: center; color: #475569; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>&#x1F310; TunnelNet</h1>
+  <p class="subtitle">安全、便捷的内网穿透服务</p>
+  <p>当前可用域名：<strong id="domain"></strong></p>
+  <div class="steps">
+    <h3>使用方式</h3>
+    <ol>
+      <li>通过管理面板创建一个隧道，获取 <b>隧道编码</b> 和 <b>认证令牌</b></li>
+      <li>在本地运行 TunnelNet 客户端，使用令牌连接服务端</li>
+      <li>访问 <code>http://域名/隧道编码/</code> 即可访问本地服务</li>
+    </ol>
+  </div>
+  <p class="footer">Powered by TunnelNet &copy; 2025</p>
+</div>
+<script>document.getElementById('domain').textContent = location.host || window.__DOMAIN__;</script>
+</body>
+</html>"""
+
+
+# ======================== 启动与清理 ========================
+
+async def on_startup(app: web.Application):
+    """服务启动时初始化数据库、打印横幅"""
+    global _db
+
+    # 初始化数据库表结构
+    await tunnel_db.init_db()
+
+    # 建立全局数据库连接（后续请求复用）
+    _db = await aiosqlite.connect(DB_PATH)
+
+    # 打印启动横幅
+    domain = await _get_server_domain()
+    banner = f"""
+╔══════════════════════════════════════════════════╗
+║              TunnelNet Server 已启动              ║
+╠══════════════════════════════════════════════════╣
+║  域名  : {domain:<38s}║
+║  端口  : {SERVER_PORT:<38d}║
+║  地址  : http://0.0.0.0:{SERVER_PORT:<27d}║
+╚══════════════════════════════════════════════════╝"""
+    print(banner)
+
+
+async def on_cleanup(app: web.Application):
+    """服务关闭时清理所有资源"""
+    global _db
+
+    # 关闭所有活跃的 WebSocket 连接
+    for code, ws in list(active_tunnels.items()):
+        try:
+            await ws.close(code=4001, message=b"Server shutting down")
+        except Exception:
+            pass
+    active_tunnels.clear()
+    tunnel_ws_info.clear()
+    tunnel_meta.clear()
+
+    # 取消所有待处理请求
+    for req_id, future in list(pending_requests.items()):
+        if not future.done():
+            future.set_exception(Exception("Server shutting down"))
+    pending_requests.clear()
+
+    # 关闭数据库连接
+    if _db:
+        try:
+            await _db.close()
+        except Exception:
+            pass
+        _db = None
+
+    print("[TunnelNet] 服务已停止，资源已释放。")
+
+
+# ======================== 页面路由 ========================
+
+async def index_handler(request: web.Request) -> web.Response:
+    """GET / — 首页，渲染 Jinja2 模板"""
+    domain = await _get_server_domain()
+    try:
+        tpl = _get_template_env().get_template("index.html")
+        html = tpl.render(domain=domain)
+        return web.Response(text=html, content_type="text/html; charset=utf-8")
+    except Exception:
+        # 模板加载失败时返回内嵌默认页
+        html = _DEFAULT_HTML.replace("window.__DOMAIN__", f"'{domain}'")
+        return web.Response(text=html, content_type="text/html; charset=utf-8")
+
+
+# ======================== JSON API 路由 ========================
+
+async def get_config_handler(request: web.Request) -> web.Response:
+    """GET /api/config — 获取服务器配置"""
+    config = await tunnel_db.get_config(_get_db())
+    return web.json_response(config)
+
+
+async def update_config_handler(request: web.Request) -> web.Response:
+    """POST /api/config — 更新服务器域名"""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "请求体不是合法的 JSON"}, status=400)
+
+    domain = body.get("domain", "").strip()
+    if not domain:
+        return web.json_response({"error": "缺少 domain 字段"}, status=400)
+
+    # 校验域名格式
+    ok, msg = _validate_domain(domain)
+    if not ok:
+        return web.json_response({"error": f"域名格式不合法：{msg}"}, status=400)
+
+    result = await tunnel_db.set_config(_get_db(), domain)
+    return web.json_response({"success": True, **result})
+
+
+async def list_tunnels_handler(request: web.Request) -> web.Response:
+    """GET /api/tunnels — 列出所有隧道（脱敏 auth_token）"""
+    tunnels = await tunnel_db.list_tunnels(_get_db())
+    # 安全处理：隐藏完整 auth_token，仅返回前 8 位前缀
+    safe_list = []
+    for t in tunnels:
+        safe = dict(t)
+        safe["token_prefix"] = t["auth_token"][:8]
+        del safe["auth_token"]
+        safe_list.append(safe)
+    return web.json_response({"tunnels": safe_list})
+
+
+async def create_tunnel_handler(request: web.Request) -> web.Response:
+    """POST /api/tunnels — 创建新隧道，返回完整信息（含 auth_token）"""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "请求体不是合法的 JSON"}, status=400)
+
+    name = body.get("name", "").strip()
+    local_port = body.get("local_port")
+    local_host = body.get("local_host", "localhost").strip()
+    description = body.get("description", "").strip()
+
+    # 参数校验
+    if not name:
+        return web.json_response({"error": "缺少 name 字段"}, status=400)
+    if local_port is None:
+        return web.json_response({"error": "缺少 local_port 字段"}, status=400)
+    try:
+        local_port = int(local_port)
+        if not (1 <= local_port <= 65535):
+            raise ValueError
+    except (ValueError, TypeError):
+        return web.json_response({"error": "local_port 必须为 1-65535 的整数"}, status=400)
+
+    tunnel = await tunnel_db.create_tunnel(
+        _get_db(), name=name, local_port=local_port,
+        local_host=local_host or "localhost",
+        description=description,
+    )
+
+    # 记录日志
+    await tunnel_db.add_log(
+        _get_db(), tunnel["id"], "create",
+        f"隧道已创建：{tunnel['code']}", request.remote or "",
+    )
+
+    return web.json_response({"success": True, "tunnel": tunnel})
+
+
+async def delete_tunnel_handler(request: web.Request) -> web.Response:
+    """DELETE /api/tunnels/{tunnel_id} — 删除隧道，同时断开其 WebSocket 连接"""
+    tunnel_id = request.match_info["tunnel_id"]
+
+    # 先查找隧道信息（用于获取 code 以断开 WebSocket）
+    tunnels = await tunnel_db.list_tunnels(_get_db())
+    target = next((t for t in tunnels if t["id"] == tunnel_id), None)
+
+    deleted = await tunnel_db.delete_tunnel(_get_db(), tunnel_id)
+    if not deleted:
+        return web.json_response({"error": "隧道不存在"}, status=404)
+
+    # 如果该隧道有活跃的 WebSocket 连接，主动断开
+    if target:
+        code = target["code"]
+        if code in active_tunnels:
+            ws = active_tunnels.pop(code)
+            try:
+                await ws.close(code=4001, message=b"Tunnel deleted")
+            except Exception:
+                pass
+            tunnel_meta.pop(code, None)
+            tunnel_ws_info.pop(code, None)
+
+    return web.json_response({"success": True, "message": "隧道已删除"})
+
+
+async def get_logs_handler(request: web.Request) -> web.Response:
+    """GET /api/tunnels/{tunnel_id}/logs — 获取隧道的操作日志"""
+    tunnel_id = request.match_info["tunnel_id"]
+
+    # 验证隧道是否存在
+    tunnels = await tunnel_db.list_tunnels(_get_db())
+    if not any(t["id"] == tunnel_id for t in tunnels):
+        return web.json_response({"error": "隧道不存在"}, status=404)
+
+    logs = await tunnel_db.get_logs(_get_db(), tunnel_id)
+    return web.json_response({"logs": logs})
+
+
+async def get_tunnel_status_handler(request: web.Request) -> web.Response:
+    """GET /api/tunnel-status — 获取所有隧道的实时状态（含在线统计）"""
+    domain = await _get_server_domain()
+
+    # 从内存中的 tunnel_meta 获取实时统计数据
+    status_map: dict[str, dict] = {}
+    for code, meta in tunnel_meta.items():
+        status_map[code] = {
+            "online": True,
+            "connected_at": meta.get("connected_at", ""),
+            "bytes_in": meta.get("bytes_in", 0),
+            "bytes_out": meta.get("bytes_out", 0),
+            "request_count": meta.get("request_count", 0),
+        }
+
+    return web.json_response({
+        "tunnels": status_map,
+        "domain": domain,
+    })
+
+
+# ======================== WebSocket 隧道端点 ========================
+
+async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
+    """
+    GET /ws?key=<auth_token 或 tunnel_code>
+    隧道客户端通过此 WebSocket 连接到服务端，接收转发请求并返回响应。
+    """
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    # ---- 验证连接密钥 ----
+    key = request.query.get("key", "").strip()
+    if not key:
+        await ws.close(code=4001, message=b"Missing authentication key")
+        return ws
+
+    db = _get_db()
+
+    # 优先按 auth_token 查找，其次按 code 查找
+    tunnel = await tunnel_db.get_tunnel_by_token(db, key)
+    if not tunnel:
+        # 尝试按隧道编码查找
+        tunnel = await tunnel_db.get_tunnel(db, key)
+    if not tunnel:
+        await ws.close(code=4003, message=b"Invalid key: tunnel not found")
+        return ws
+
+    code = tunnel["code"]
+
+    # ---- 如果已有同编码的连接，先关闭旧连接 ----
+    if code in active_tunnels:
+        old_ws = active_tunnels[code]
+        try:
+            await old_ws.close(code=4008, message=b"Replaced by new connection")
+        except Exception:
+            pass
+        # 清理旧连接的元数据
+        tunnel_meta.pop(code, None)
+        tunnel_ws_info.pop(code, None)
+
+    # ---- 注册新连接 ----
+    active_tunnels[code] = ws
+    tunnel_ws_info[code] = {
+        "tunnel_id": tunnel["id"],
+        "tunnel_name": tunnel["name"],
+    }
+    tunnel_meta[code] = {
+        "connected_at": _now_iso(),
+        "bytes_in": 0,
+        "bytes_out": 0,
+        "request_count": 0,
+    }
+
+    # 更新数据库状态为在线
+    await tunnel_db.update_tunnel_status(db, code, "online")
+
+    # 发送连接成功消息给客户端
+    domain = await _get_server_domain()
+    await ws.send_json({
+        "type": "connected",
+        "tunnel_code": code,
+        "public_url": f"http://{domain}/{code}",
+    })
+
+    # 记录连接日志
+    peer_ip = request.remote or ""
+    await tunnel_db.add_log(
+        db, tunnel["id"], "connect",
+        f"客户端已连接 (IP: {peer_ip})", peer_ip,
+    )
+
+    # ---- 心跳机制 ----
+    pong_received = asyncio.Event()
+
+    async def heartbeat_loop():
+        """每 30 秒发送 ping，10 秒内未收到 pong 则关闭连接"""
+        while not ws.closed:
+            await asyncio.sleep(30)
+            if ws.closed:
+                break
+            pong_received.clear()
+            try:
+                await ws.send_json({"type": "ping"})
+            except Exception:
+                break
+            # 等待 10 秒内收到 pong
+            try:
+                await asyncio.wait_for(pong_received.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                # 心跳超时，关闭连接
+                print(f"[TunnelNet] 隧道 {code} 心跳超时，断开连接")
+                try:
+                    await ws.close(code=4008, message=b"Heartbeat timeout")
+                except Exception:
+                    pass
+                break
+
+    hb_task = asyncio.create_task(heartbeat_loop())
+
+    # ---- 消息循环 ----
+    try:
+        async for msg in ws:
+            if msg.type == web.WSMsgType.TEXT:
+                try:
+                    data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    continue
+
+                msg_type = data.get("type")
+
+                if msg_type == "pong":
+                    # 收到心跳响应
+                    pong_received.set()
+
+                elif msg_type == "response":
+                    # 收到隧道客户端返回的 HTTP 响应
+                    req_id = data.get("id", "")
+                    future = pending_requests.get(req_id)
+                    if future and not future.done():
+                        future.set_result(data)
+
+            elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
+                break
+
+    except asyncio.CancelledError:
+        pass
+    finally:
+        # 取消心跳任务
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
+
+        # 仅当当前连接仍为该 code 的活跃连接时才清理
+        if active_tunnels.get(code) is ws:
+            del active_tunnels[code]
+            tunnel_meta.pop(code, None)
+            tunnel_ws_info.pop(code, None)
+
+            # 更新数据库状态为离线
+            try:
+                await tunnel_db.update_tunnel_status(db, code, "offline")
+                await tunnel_db.add_log(
+                    db, tunnel["id"], "disconnect",
+                    f"客户端已断开 (IP: {peer_ip})", peer_ip,
+                )
+            except Exception:
+                pass
+
+        # 释放该隧道所有待处理的请求（避免请求端永久挂起）
+        for req_id in list(pending_requests.keys()):
+            if req_id.startswith(f"{code}-"):
+                future = pending_requests.pop(req_id, None)
+                if future and not future.done():
+                    future.set_exception(Exception("Tunnel disconnected"))
+
+    return ws
+
+
+# ======================== HTTP 反向代理（核心隧道转发） ========================
+
+async def tunnel_request_handler(request: web.Request) -> web.Response:
+    """
+    捕获所有未匹配的路径，判断首段是否为隧道编码：
+    - 是 → 通过 WebSocket 转发请求到隧道客户端
+    - 否 → 展示默认说明页
+    """
+    path_info = request.match_info["path_info"]  # 例如 "ABCD1234/api/users"
+    first_segment = path_info.split("/", 1)[0].upper()
+
+    # 检查是否匹配 8 位隧道编码格式
+    if not CODE_RE.match(first_segment):
+        return web.Response(
+            text=_DEFAULT_HTML,
+            content_type="text/html; charset=utf-8",
+        )
+
+    code = first_segment
+
+    # 检查隧道是否在线
+    ws = active_tunnels.get(code)
+    if not ws or ws.closed:
+        return web.json_response(
+            {
+                "error": "Tunnel offline",
+                "message": f"隧道 {code} 当前不在线，请稍后再试",
+            },
+            status=502,
+        )
+
+    # 构建转发给客户端的子路径
+    sub_path = path_info[len(first_segment):]
+    if not sub_path:
+        sub_path = "/"
+    # 拼上 query string
+    if request.query_string:
+        sub_path = f"{sub_path}?{request.query_string}"
+
+    # 生成唯一请求 ID（编码前缀便于按隧道清理）
+    req_id = f"{code}-{uuid.uuid4().hex[:12]}"
+
+    # 创建 Future 等待隧道客户端返回响应
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    pending_requests[req_id] = future
+
+    try:
+        # 读取请求体
+        body = await request.read()
+        body_b64 = base64.b64encode(body).decode("utf-8") if body else ""
+
+        # 收集请求头，过滤 hop-by-hop 头
+        headers = {}
+        for key, value in request.headers.items():
+            if key.lower() not in _HOP_BY_HOP:
+                headers[key] = value
+
+        # 通过 WebSocket 将请求发送给隧道客户端
+        await ws.send_json({
+            "type": "request",
+            "id": req_id,
+            "method": request.method,
+            "url": sub_path,
+            "headers": headers,
+            "body": body_b64,
+        })
+
+        # 等待响应（30 秒超时）
+        try:
+            resp_data = await asyncio.wait_for(future, timeout=30)
+        except asyncio.TimeoutError:
+            return web.json_response(
+                {"error": "Gateway Timeout", "message": "隧道客户端响应超时"},
+                status=504,
+            )
+
+        # ---- 解析隧道客户端返回的响应 ----
+        status_code = resp_data.get("status_code", 200)
+        resp_headers = resp_data.get("headers", {})
+        resp_body_b64 = resp_data.get("body", "")
+        resp_body = base64.b64decode(resp_body_b64) if resp_body_b64 else b""
+
+        # 更新隧道统计
+        meta = tunnel_meta.get(code, {})
+        meta["bytes_in"] = meta.get("bytes_in", 0) + len(body)
+        meta["bytes_out"] = meta.get("bytes_out", 0) + len(resp_body)
+        meta["request_count"] = meta.get("request_count", 0) + 1
+
+        # 提取 Content-Type 并过滤不应透传的响应头
+        content_type = "application/octet-stream"
+        pass_headers: dict[str, str] = {}
+        for key, value in resp_headers.items():
+            lower = key.lower()
+            if lower == "content-type":
+                content_type = value
+            elif lower not in ("transfer-encoding", "connection", "keep-alive", "content-length"):
+                pass_headers[key] = value
+
+        return web.Response(
+            status=status_code,
+            body=resp_body,
+            content_type=content_type,
+            headers=pass_headers if pass_headers else None,
+        )
+
+    except asyncio.CancelledError:
+        return web.json_response({"error": "Request cancelled"}, status=499)
+    except Exception as e:
+        return web.json_response(
+            {"error": "Internal Server Error", "message": str(e)},
+            status=500,
+        )
+    finally:
+        # 无论如何都清理 pending_requests 中的条目
+        pending_requests.pop(req_id, None)
+
+
+# ======================== 应用工厂 ========================
+
+def create_app() -> web.Application:
+    """创建并配置 aiohttp 应用"""
+    app = web.Application()
+
+    # 注册生命周期钩子
+    app.on_startup.append(on_startup)
+    app.on_cleanup.append(on_cleanup)
+
+    # ---- 页面路由 ----
+    app.router.add_get("/", index_handler)
+
+    # ---- JSON API 路由 ----
+    app.router.add_get("/api/config", get_config_handler)
+    app.router.add_post("/api/config", update_config_handler)
+    app.router.add_get("/api/tunnels", list_tunnels_handler)
+    app.router.add_post("/api/tunnels", create_tunnel_handler)
+    app.router.add_delete("/api/tunnels/{tunnel_id}", delete_tunnel_handler)
+    app.router.add_get("/api/tunnels/{tunnel_id}/logs", get_logs_handler)
+    app.router.add_get("/api/tunnel-status", get_tunnel_status_handler)
+
+    # ---- WebSocket 隧道端点 ----
+    app.router.add_get("/ws", websocket_handler)
+
+    # ---- HTTP 反向代理（兜底路由，必须放在最后）----
+    # 匹配所有未被上述路由捕获的路径，判断首段是否为隧道编码
+    app.router.add_route("*", "/{path_info:.+}", tunnel_request_handler)
+
+    return app
+
+
+# ======================== 入口 ========================
+
+if __name__ == "__main__":
+    app = create_app()
+    web.run_app(app, host="0.0.0.0", port=SERVER_PORT, print=None)
