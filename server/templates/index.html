@@ -427,18 +427,41 @@ function showToast(msg, type) {
 
 /* ── Clipboard ── */
 function copyText(text) {
-  navigator.clipboard.writeText(text).then(function() {
-    showToast('已复制: ' + text.substring(0, 20) + (text.length > 20 ? '...' : ''), 'success');
-  }).catch(function() {
-    const ta = document.createElement('textarea');
+  // 优先使用 Clipboard API (HTTPS)
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(function() {
+      showToast('已复制', 'success');
+    }).catch(function() {
+      _fallbackCopy(text);
+    });
+  } else {
+    _fallbackCopy(text);
+  }
+}
+function _fallbackCopy(text) {
+  var ok = false;
+  try {
+    var ta = document.createElement('textarea');
     ta.value = text;
-    ta.style.cssText = 'position:fixed;left:-9999px';
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
     document.body.appendChild(ta);
+    ta.focus();
     ta.select();
-    document.execCommand('copy');
+    var range = document.createRange();
+    range.selectNodeContents(ta);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    ta.setSelectionRange(0, text.length);
+    ok = document.execCommand('copy');
     document.body.removeChild(ta);
-    showToast('已复制', 'success');
-  });
+    if (ok) {
+      showToast('已复制', 'success');
+      return;
+    }
+  } catch(e) {}
+  // 最终兜底：弹窗让用户手动复制
+  window.prompt('请手动复制以下内容：', text);
 }
 
 /* ── Domain Edit ── */
