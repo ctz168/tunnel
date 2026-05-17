@@ -530,9 +530,22 @@ function renderTunnels() {
     var pubUrl = p2pUrl || ('http://' + DOMAIN + '/' + code);
     var bytesIn = info.bytes_in || 0;
     var bytesOut = info.bytes_out || 0;
-    var modeTag = p2pMode
-      ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#065f46;color:#6ee7b7;font-weight:600">P2P</span>'
-      : (online ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#1e3a5f;color:#93c5fd;font-weight:600">中继</span>' : '');
+
+    // 解析 P2P 模式
+    var p2pInfo = null;
+    var p2pModeStr = '';
+    try { p2pInfo = t.p2p_info ? JSON.parse(t.p2p_info) : null; } catch(e) {}
+    if (p2pInfo && p2pInfo.mode) {
+      var modeMap = {
+        'ipv6':  '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#065f46;color:#6ee7b7;font-weight:600">IPv6</span>',
+        'upnp':  '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#1e3a5f;color:#93c5fd;font-weight:600">UPnP</span>',
+        'dual':  '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#064e3b;color:#34d399;font-weight:600">Dual</span>'
+      };
+      p2pModeStr = modeMap[p2pInfo.mode] || '';
+    } else if (p2pMode) {
+      p2pModeStr = '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#065f46;color:#6ee7b7;font-weight:600">P2P</span>';
+    }
+    var relayTag = online && !p2pMode ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#1e3a5f;color:#93c5fd;font-weight:600">中继</span>' : '';
 
     html += '<tr>' +
       '<td><strong>' + escapeHtml(t.name || '-') + '</strong>' +
@@ -543,11 +556,11 @@ function renderTunnels() {
       '<td>' +
         '<span class="status">' +
           '<span class="dot ' + (online ? 'dot-online' : 'dot-offline') + '"></span>' +
-          (online ? '在线 ' + modeTag : '离线') +
+          (online ? '在线 ' + p2pModeStr + relayTag : '离线') +
         '</span>' +
       '</td>' +
       '<td class="traffic">' +
-        (p2pMode ? '<span style="font-size:11px;color:var(--success)">P2P 直连</span>' : '') +
+        (p2pModeStr ? '<span style="font-size:11px;color:var(--success)">P2P 直连</span>' : (online ? '<span style="font-size:11px;color:var(--text-muted)">服务端中继</span>' : '')) +
         '&#x2B06; <b>' + formatBytes(bytesIn) + '</b><br>&#x2B07; <b>' + formatBytes(bytesOut) + '</b>' +
       '</td>' +
       '<td><div class="public-url">' +

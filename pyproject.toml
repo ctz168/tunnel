@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tunnel-client"
+version = "2.1.0"
+description = "Tunnel 内网穿透客户端 - 支持 IPv6/IPv4 P2P 直连与中继双模式"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [{name = "Tunnel"}]
+keywords = ["tunnel", "nat", "p2p", "ipv6", "内网穿透"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "aiohttp>=3.9.0",
+]
+
+[project.optional-dependencies]
+dev = ["build", "twine"]
+
+[project.scripts]
+tunnel-client = "tunnel_client.client:main"
+
+[project.urls]
+Homepage = "https://github.com/ctz168/tunnel"
+
+[tool.setuptools.packages.find]
+include = ["tunnel_client*"]

@@ -564,6 +564,9 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     # 更新数据库状态为在线
     await tunnel_db.update_tunnel_status(db, code, "online")
 
+    # 记录客户端 IP (必须在 send_json 之前获取)
+    peer_ip = request.remote or ""
+
     # 发送连接成功消息给客户端
     domain = await _get_server_domain()
     await ws.send_json({
@@ -574,10 +577,9 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     })
 
     # 清除旧的 P2P 地址（客户端重连后需要重新上报）
-    await tunnel_db.update_tunnel_public_url(db, code, None)
+    await tunnel_db.update_tunnel_p2p_info(db, code, None, None)
 
     # 记录连接日志
-    peer_ip = request.remote or ""
     await tunnel_db.add_log(
         db, tunnel["id"], "connect",
         f"客户端已连接 (IP: {peer_ip})", peer_ip,
@@ -640,12 +642,31 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                             logger.error(f"更新隧道 {code} 客户端信息失败: {e}")
 
                 elif msg_type == "p2p_info":
-                    # 客户端上报 P2P 公网地址（UPnP 成功）
-                    p2p_url = data.get("public_url", "").strip()
-                    if p2p_url:
+                    # 客户端上报 P2P 信息 (IPv6/UPnP/Dual)
+                    # 新格式: {"urls": [{"url": "...", "type": "ipv6|upnp"}], "mode": "ipv6|upnp|dual"}
+                    # 兼容旧格式: {"public_url": "http://..."}
+                    urls = data.get("urls")
+                    mode = data.get("mode", "")
+                    legacy_url = data.get("public_url", "").strip()
+
+                    if urls and isinstance(urls, list):
+                        # 新格式: 多 URL + 模式
+                        p2p_json = json.dumps({"urls": urls, "mode": mode}, ensure_ascii=False)
+                        first_url = urls[0].get("url", "") if urls else ""
                         try:
-                            await tunnel_db.update_tunnel_public_url(db, code, p2p_url)
-                            logger.info(f"隧道 {code} P2P 已启用: {p2p_url}")
+                            await tunnel_db.update_tunnel_p2p_info(db, code, p2p_json, first_url)
+                            mode_labels = {"ipv6": "IPv6 直连", "upnp": "UPnP IPv4", "dual": "IPv6 + UPnP 双栈"}
+                            logger.info(f"隧道 {code} P2P 模式: {mode_labels.get(mode, mode)}")
+                            for u in urls:
+                                logger.info(f"  -> {u.get('type', '?')}: {u.get('url', '')}")
+                        except Exception as e:
+                            logger.error(f"更新隧道 {code} P2P 信息失败: {e}")
+                    elif legacy_url:
+                        # 兼容旧版客户端 (单 URL)
+                        p2p_json = json.dumps({"urls": [{"url": legacy_url, "type": "upnp"}], "mode": "upnp"}, ensure_ascii=False)
+                        try:
+                            await tunnel_db.update_tunnel_p2p_info(db, code, p2p_json, legacy_url)
+                            logger.info(f"隧道 {code} P2P 已启用 (旧格式): {legacy_url}")
                         except Exception as e:
                             logger.error(f"更新隧道 {code} P2P 地址失败: {e}")
 
@@ -719,17 +740,63 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
     tunnels_list = await tunnel_db.list_tunnels(_get_db())
     target = next((t for t in tunnels_list if t["code"] == code), None)
 
-    # P2P 模式：如果有公网地址，直接 302 重定向（不经过服务器中转）
-    if target and target.get("public_url"):
-        sub_path = path_info[len(first_segment):]
-        if not sub_path:
-            sub_path = "/"
+    # ---- P2P 模式：智能重定向 ----
+    sub_path = path_info[len(first_segment):]
+    if not sub_path:
+        sub_path = "/"
+    if request.query_string:
+        sub_path = f"{sub_path}?{request.query_string}"
+
+    if target and target.get("p2p_info"):
+        try:
+            p2p = json.loads(target["p2p_info"])
+            p2p_urls = p2p.get("urls", [])
+            p2p_mode = p2p.get("mode", "")
+
+            if p2p_urls:
+                # 判断访客 IP 类型: 包含冒号视为 IPv6
+                visitor_remote = request.remote or ""
+                visitor_is_ipv6 = ":" in visitor_remote
+
+                # 根据访客 IP 选择最佳 P2P 地址
+                redirect_url = None
+                if visitor_is_ipv6:
+                    # IPv6 访问者: 优先 IPv6 地址
+                    for entry in p2p_urls:
+                        if entry.get("type") == "ipv6":
+                            redirect_url = entry["url"]
+                            break
+                    if not redirect_url:
+                        # 没有 IPv6 地址，尝试 UPnP (双栈可能可达)
+                        for entry in p2p_urls:
+                            if entry.get("type") == "upnp":
+                                redirect_url = entry["url"]
+                                break
+                else:
+                    # IPv4 访问者: 优先 UPnP IPv4
+                    for entry in p2p_urls:
+                        if entry.get("type") == "upnp":
+                            redirect_url = entry["url"]
+                            break
+                    if not redirect_url:
+                        # 没有 UPnP，尝试 IPv6 双栈 (可能可达)
+                        for entry in p2p_urls:
+                            if entry.get("type") == "ipv6":
+                                redirect_url = entry["url"]
+                                break
+
+                if redirect_url:
+                    full_url = redirect_url.rstrip("/") + sub_path
+                    raise web.HTTPFound(full_url)
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # 兼容旧版: 仅 public_url 无 p2p_info
+    if target and target.get("public_url") and not target.get("p2p_info"):
         p2p_url = target["public_url"].rstrip("/") + sub_path
-        if request.query_string:
-            p2p_url += "?" + request.query_string
         raise web.HTTPFound(p2p_url)
 
-    # 中继模式：检查隧道是否在线
+    # ---- 中继模式：检查隧道是否在线 ----
     ws = active_tunnels.get(code)
     if not ws or ws.closed:
         return web.json_response(
@@ -739,14 +806,6 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
             },
             status=502,
         )
-
-    # 构建转发给客户端的子路径
-    sub_path = path_info[len(first_segment):]
-    if not sub_path:
-        sub_path = "/"
-    # 拼上 query string
-    if request.query_string:
-        sub_path = f"{sub_path}?{request.query_string}"
 
     # 生成唯一请求 ID（编码前缀便于按隧道清理）
     req_id = f"{code}-{uuid.uuid4().hex[:12]}"
@@ -949,5 +1008,5 @@ def create_app() -> web.Application:
 
 if __name__ == "__main__":
     app = create_app()
-    logger.info(f"启动 http://0.0.0.0:{SERVER_PORT}")
-    web.run_app(app, host="0.0.0.0", port=SERVER_PORT, print=None, access_log=None)
+    logger.info(f"启动 http://[::]:{SERVER_PORT} (IPv4/IPv6 双栈)")
+    web.run_app(app, host="::", port=SERVER_PORT, print=None, access_log=None)

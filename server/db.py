@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS tunnel (
     auth_token  TEXT UNIQUE NOT NULL,
     status      TEXT NOT NULL DEFAULT 'offline',
     public_url  TEXT,
+    p2p_info    TEXT,
     description TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
@@ -63,6 +64,8 @@ async def init_db():
         columns = [row[1] for row in await cursor.fetchall()]
         if "public_url" not in columns:
             await db.execute("ALTER TABLE tunnel ADD COLUMN public_url TEXT")
+        if "p2p_info" not in columns:
+            await db.execute("ALTER TABLE tunnel ADD COLUMN p2p_info TEXT")
         await db.commit()
 
 
@@ -104,7 +107,7 @@ def _gen_token() -> str:
 
 async def list_tunnels(db: aiosqlite.Connection) -> list[dict]:
     cursor = await db.execute(
-        "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, description, created_at, updated_at "
+        "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, p2p_info, description, created_at, updated_at "
         "FROM tunnel ORDER BY created_at DESC"
     )
     rows = await cursor.fetchall()
@@ -112,14 +115,17 @@ async def list_tunnels(db: aiosqlite.Connection) -> list[dict]:
 
 
 async def get_tunnel(db: aiosqlite.Connection, code: str) -> dict | None:
-    cursor = await db.execute("SELECT * FROM tunnel WHERE code = ?", (code.upper(),))
+    cursor = await db.execute(
+        "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, p2p_info, description, created_at, updated_at "
+        "FROM tunnel WHERE code = ?", (code.upper(),)
+    )
     row = await cursor.fetchone()
     return _row_to_tunnel(row) if row else None
 
 
 async def get_tunnel_by_token(db: aiosqlite.Connection, token: str) -> dict | None:
     cursor = await db.execute(
-        "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, description, created_at, updated_at "
+        "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, p2p_info, description, created_at, updated_at "
         "FROM tunnel WHERE auth_token = ?", (token,)
     )
     row = await cursor.fetchone()
@@ -133,8 +139,8 @@ async def create_tunnel(db: aiosqlite.Connection, name: str, description: str = 
     tid = str(uuid.uuid4())
     now = _now()
     await db.execute(
-        "INSERT INTO tunnel (id, name, code, local_port, local_host, auth_token, status, public_url, description, created_at, updated_at) "
-        "VALUES (?, ?, ?, NULL, NULL, ?, 'offline', NULL, ?, ?, ?)",
+        "INSERT INTO tunnel (id, name, code, local_port, local_host, auth_token, status, public_url, p2p_info, description, created_at, updated_at) "
+        "VALUES (?, ?, ?, NULL, NULL, ?, 'offline', NULL, NULL, ?, ?, ?)",
         (tid, name, code, token, description, now, now),
     )
     await db.commit()
@@ -142,7 +148,7 @@ async def create_tunnel(db: aiosqlite.Connection, name: str, description: str = 
         "id": tid, "name": name, "code": code,
         "local_port": None, "local_host": None,
         "auth_token": token, "status": "offline",
-        "public_url": None, "description": description,
+        "public_url": None, "p2p_info": None, "description": description,
         "created_at": now, "updated_at": now,
     }
 
@@ -178,6 +184,22 @@ async def update_tunnel_public_url(db: aiosqlite.Connection, code: str,
         "UPDATE tunnel SET public_url = ?, updated_at = ? WHERE code = ?",
         (public_url, _now(), code),
     )
+    await db.commit()
+
+
+async def update_tunnel_p2p_info(db: aiosqlite.Connection, code: str,
+                                   p2p_info: str | None, public_url: str | None = None):
+    """更新隧道的 P2P 详细信息 (JSON 格式)"""
+    if public_url is not None:
+        await db.execute(
+            "UPDATE tunnel SET p2p_info = ?, public_url = ?, updated_at = ? WHERE code = ?",
+            (p2p_info, public_url, _now(), code),
+        )
+    else:
+        await db.execute(
+            "UPDATE tunnel SET p2p_info = ?, updated_at = ? WHERE code = ?",
+            (p2p_info, _now(), code),
+        )
     await db.commit()
 
 
@@ -225,7 +247,8 @@ def _row_to_tunnel(row) -> dict:
         "auth_token": row[5],
         "status": row[6],
         "public_url": row[7],
-        "description": row[8] or "",
-        "created_at": row[9],
-        "updated_at": row[10],
+        "p2p_info": row[8],
+        "description": row[9] or "",
+        "created_at": row[10],
+        "updated_at": row[11],
     }
