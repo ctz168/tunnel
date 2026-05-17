@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS tunnel (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     code        TEXT UNIQUE NOT NULL,
-    local_port  INTEGER NOT NULL,
-    local_host  TEXT NOT NULL DEFAULT 'localhost',
+    local_port  INTEGER,
+    local_host  TEXT,
     auth_token  TEXT UNIQUE NOT NULL,
     status      TEXT NOT NULL DEFAULT 'offline',
     description TEXT,
@@ -120,24 +120,23 @@ async def get_tunnel_by_token(db: aiosqlite.Connection, token: str) -> dict | No
     return _row_to_tunnel(row) if row else None
 
 
-async def create_tunnel(db: aiosqlite.Connection, name: str, local_port: int,
-                        local_host: str = "localhost", description: str = "") -> dict:
+async def create_tunnel(db: aiosqlite.Connection, name: str, description: str = "") -> dict:
     code = _gen_code()
     token = _gen_token()
     tid = str(uuid.uuid4())
     now = _now()
     await db.execute(
         "INSERT INTO tunnel (id, name, code, local_port, local_host, auth_token, status, description, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'offline', ?, ?, ?)",
-        (tid, name, code, local_port, local_host, token, description, now, now),
+        "VALUES (?, ?, ?, NULL, NULL, ?, 'offline', ?, ?, ?)",
+        (tid, name, code, token, description, now, now),
     )
     await db.commit()
     return {
         "id": tid,
         "name": name,
         "code": code,
-        "local_port": local_port,
-        "local_host": local_host,
+        "local_port": None,
+        "local_host": None,
         "auth_token": token,
         "status": "offline",
         "description": description,
@@ -156,6 +155,16 @@ async def update_tunnel_status(db: aiosqlite.Connection, code: str, status: str)
     await db.execute(
         "UPDATE tunnel SET status = ?, updated_at = ? WHERE code = ?",
         (status, _now(), code),
+    )
+    await db.commit()
+
+
+async def update_tunnel_client_info(db: aiosqlite.Connection, code: str,
+                                      local_port: int, local_host: str):
+    """客户端连接时上报其本地端口和地址，写入数据库"""
+    await db.execute(
+        "UPDATE tunnel SET local_port = ?, local_host = ?, updated_at = ? WHERE code = ?",
+        (local_port, local_host, _now(), code),
     )
     await db.commit()
 

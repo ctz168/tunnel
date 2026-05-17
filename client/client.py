@@ -76,6 +76,13 @@ class TunnelClient:
             code = data.get("tunnel_code", "")
             print(f"  [OK] 隧道已建立")
             print(f"  [OK] 公网地址: {url}\n")
+            # 上报客户端本地端口和地址给服务端
+            if self.ws and not self.ws.closed:
+                await self.ws.send_json({
+                    "type": "client_info",
+                    "local_port": self.local_port,
+                    "local_host": self.local_host,
+                })
             if self._status_task:
                 self._status_task.cancel()
             self._status_task = asyncio.create_task(self._status_loop(code))

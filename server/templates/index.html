@@ -192,7 +192,7 @@
           <tr>
             <th>名称</th>
             <th>隧道编码</th>
-            <th>本地地址</th>
+            <th>客户端地址</th>
             <th>状态</th>
             <th>流量</th>
             <th>公网地址</th>
@@ -225,14 +225,6 @@
       <div class="form-group">
         <label>名称 *</label>
         <input type="text" id="cName" placeholder="例如: my-web">
-      </div>
-      <div class="form-group">
-        <label>本地端口 *</label>
-        <input type="number" id="cPort" placeholder="8080" value="8080" min="1" max="65535">
-      </div>
-      <div class="form-group">
-        <label>本地地址</label>
-        <input type="text" id="cHost" placeholder="localhost" value="localhost">
       </div>
       <div class="form-group">
         <label>描述</label>
@@ -507,7 +499,6 @@ function renderTunnels() {
     var info = statusMap[code] || {};
     var online = info.online ? true : false;
     var pubUrl = 'http://' + DOMAIN + '/' + code;
-    var addr = (t.local_host || 'localhost') + ':' + (t.local_port || '');
     var bytesIn = info.bytes_in || 0;
     var bytesOut = info.bytes_out || 0;
 
@@ -516,7 +507,7 @@ function renderTunnels() {
         (t.description ? '<br><span style="font-size:12px;color:var(--text-muted)">' + escapeHtml(t.description) + '</span>' : '') +
       '</td>' +
       '<td style="font-family:monospace;font-size:13px;color:var(--text-muted)">' + escapeHtml(t.code || sid) + '</td>' +
-      '<td style="font-family:monospace;font-size:13px">' + escapeHtml(addr) + '</td>' +
+      '<td style="font-family:monospace;font-size:13px">' + (t.local_host || t.local_port ? escapeHtml((t.local_host || 'localhost') + ':' + t.local_port) : '<span style="color:var(--text-muted);font-size:12px">客户端未连接</span>') + '</td>' +
       '<td>' +
         '<span class="status">' +
           '<span class="dot ' + (online ? 'dot-online' : 'dot-offline') + '"></span>' +
@@ -601,8 +592,6 @@ function openCreateModal() {
   document.getElementById('createResultArea').style.display = 'none';
   document.getElementById('createSubmitBtn').style.display = '';
   document.getElementById('cName').value = '';
-  document.getElementById('cPort').value = '8080';
-  document.getElementById('cHost').value = 'localhost';
   document.getElementById('cDesc').value = '';
   document.getElementById('cName').focus();
 }
@@ -613,12 +602,9 @@ function closeCreateModal() {
 
 function createTunnel() {
   var name = document.getElementById('cName').value.trim();
-  var port = parseInt(document.getElementById('cPort').value, 10);
-  var host = document.getElementById('cHost').value.trim() || 'localhost';
   var desc = document.getElementById('cDesc').value.trim();
 
   if (!name) { showToast('请输入隧道名称', 'error'); return; }
-  if (!port || port < 1 || port > 65535) { showToast('请输入有效的端口号 (1-65535)', 'error'); return; }
 
   var btn = document.getElementById('createSubmitBtn');
   btn.disabled = true;
@@ -627,7 +613,7 @@ function createTunnel() {
   fetch('/api/tunnels', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name, local_port: port, local_host: host, description: desc })
+    body: JSON.stringify({ name: name, description: desc })
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {

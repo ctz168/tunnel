@@ -424,26 +424,14 @@ async def create_tunnel_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "请求体不是合法的 JSON"}, status=400)
 
     name = body.get("name", "").strip()
-    local_port = body.get("local_port")
-    local_host = body.get("local_host", "localhost").strip()
     description = body.get("description", "").strip()
 
     # 参数校验
     if not name:
         return web.json_response({"error": "缺少 name 字段"}, status=400)
-    if local_port is None:
-        return web.json_response({"error": "缺少 local_port 字段"}, status=400)
-    try:
-        local_port = int(local_port)
-        if not (1 <= local_port <= 65535):
-            raise ValueError
-    except (ValueError, TypeError):
-        return web.json_response({"error": "local_port 必须为 1-65535 的整数"}, status=400)
 
     tunnel = await tunnel_db.create_tunnel(
-        _get_db(), name=name, local_port=local_port,
-        local_host=local_host or "localhost",
-        description=description,
+        _get_db(), name=name, description=description,
     )
 
     # 记录日志
@@ -629,6 +617,19 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 if msg_type == "pong":
                     # 收到心跳响应
                     pong_received.set()
+
+                elif msg_type == "client_info":
+                    # 客户端上报本地端口和地址
+                    c_port = data.get("local_port")
+                    c_host = data.get("local_host", "localhost")
+                    if c_port:
+                        try:
+                            await tunnel_db.update_tunnel_client_info(
+                                db, code, int(c_port), str(c_host),
+                            )
+                            logger.info(f"隧道 {code} 客户端上报地址: {c_host}:{c_port}")
+                        except Exception as e:
+                            logger.error(f"更新隧道 {code} 客户端信息失败: {e}")
 
                 elif msg_type == "response":
                     # 收到隧道客户端返回的 HTTP 响应
