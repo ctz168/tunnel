@@ -45,10 +45,51 @@ log_info "安装用户: $REAL_USER"
 log_info "项目目录: $PROJECT_DIR"
 log_info "服务目录: $INSTALL_DIR"
 
-# ======================== 2. 端口检查 ========================
+# ======================== 2. 检测 systemd ========================
+SERVICE_FILE="/etc/systemd/system/tunnel.service"
+HAS_SYSTEMD=false
+SYSTEMCTL_CMD="systemctl"
+
+if [ -x "/usr/bin/systemctl" ]; then
+  SYSTEMCTL_CMD="/usr/bin/systemctl"; HAS_SYSTEMD=true
+elif [ -x "/bin/systemctl" ]; then
+  SYSTEMCTL_CMD="/bin/systemctl"; HAS_SYSTEMD=true
+elif [ -x "/usr/sbin/systemctl" ]; then
+  SYSTEMCTL_CMD="/usr/sbin/systemctl"; HAS_SYSTEMD=true
+elif [ -x "/usr/sbin/systemd" ]; then
+  HAS_SYSTEMD=true
+fi
+
+# ======================== 3. 端口检查 ========================
 log_info "检查端口 ${PORT}..."
-if command -v ss &>/dev/null; then ss -tlnp 2>/dev/null | grep -q ":${PORT} " && { log_error "端口 ${PORT} 已被占用"; exit 1; }
-elif command -v lsof &>/dev/null; then lsof -i ":${PORT}" &>/dev/null && { log_error "端口 ${PORT} 已被占用"; exit 1; }
+PORT_OCCUPIED=false
+if command -v ss &>/dev/null; then
+  ss -tlnp 2>/dev/null | grep -q ":${PORT} " && PORT_OCCUPIED=true
+elif command -v lsof &>/dev/null; then
+  lsof -i ":${PORT}" &>/dev/null && PORT_OCCUPIED=true
+fi
+
+if [ "$PORT_OCCUPIED" = true ]; then
+  log_warn "端口 ${PORT} 已被占用，尝试停止现有服务..."
+  # 尝试通过 systemd 停止
+  if [ "$HAS_SYSTEMD" = true ] && [ -f "/etc/systemd/system/tunnel.service" ]; then
+    $SYSTEMCTL_CMD stop tunnel 2>/dev/null && sleep 1
+  fi
+  # 强制杀残留进程
+  if command -v lsof &>/dev/null; then
+    kill $(lsof -t -i ":${PORT}" 2>/dev/null) 2>/dev/null && sleep 1 || true
+  fi
+  # 再次检查
+  PORT_OCCUPIED=false
+  if command -v ss &>/dev/null; then
+    ss -tlnp 2>/dev/null | grep -q ":${PORT} " && PORT_OCCUPIED=true
+  elif command -v lsof &>/dev/null; then
+    lsof -i ":${PORT}" &>/dev/null && PORT_OCCUPIED=true
+  fi
+  if [ "$PORT_OCCUPIED" = true ]; then
+    log_error "端口 ${PORT} 仍被占用，请手动释放后重试"
+    exit 1
+  fi
 fi
 log_ok "端口 ${PORT} 可用"
 
@@ -108,23 +149,6 @@ print('  数据库初始化完成')
 " 2>&1 || log_warn "数据库将在首次启动时自动初始化"
 
 # ======================== 8. systemd 服务 ========================
-SERVICE_FILE="/etc/systemd/system/tunnel.service"
-HAS_SYSTEMD=false
-
-# 检测 systemd（在 sudo 环境下需要检查完整路径）
-if [ -x "/usr/bin/systemctl" ] || [ -x "/bin/systemctl" ] || [ -x "/usr/sbin/systemctl" ]; then
-  HAS_SYSTEMD=true
-elif [ -x "/usr/sbin/systemd" ]; then
-  HAS_SYSTEMD=true
-fi
-
-SYSTEMCTL_CMD="systemctl"
-if [ -x "/usr/bin/systemctl" ]; then
-  SYSTEMCTL_CMD="/usr/bin/systemctl"
-elif [ -x "/bin/systemctl" ]; then
-  SYSTEMCTL_CMD="/bin/systemctl"
-fi
-
 if [ "$HAS_SYSTEMD" = true ]; then
   log_info "配置 systemd 服务..."
   cat > "$SERVICE_FILE" << EOF
