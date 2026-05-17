@@ -6,7 +6,7 @@
 set -e
 
 INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
-BIN_NAME="tunnel-client"
+BIN_NAME="tunnel-p2p-client"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 log_info()  { echo -e "${CYAN}  [INFO]${NC} $1"; }
@@ -71,14 +71,14 @@ SCRIPT_PATH="$INSTALL_DIR/client.py"
 LINK_DIR="/usr/local/bin"
 
 if [ -w "$LINK_DIR" ] || [ "$EUID" -eq 0 ]; then
-  ln -sf "$SCRIPT_PATH" "$LINK_DIR/tunnel-client" 2>/dev/null || true
+  ln -sf "$SCRIPT_PATH" "$LINK_DIR/tunnel-p2p-client" 2>/dev/null || true
   # 创建 wrapper 脚本，自动激活 venv
-  cat > "$LINK_DIR/tunnel-client" << 'WRAPPER'
+  cat > "$LINK_DIR/tunnel-p2p-client" << 'WRAPPER'
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
-TUNNEL_CLIENT_DIR="$(dirname "$SCRIPT_DIR")/tunnel-client-wrapper"
+TUNNEL_CLIENT_DIR="$(dirname "$SCRIPT_DIR")/tunnel-p2p-wrapper"
 WRAPPER
-  log_ok "已安装到 $LINK_DIR/tunnel-client"
+  log_ok "已安装到 $LINK_DIR/tunnel-p2p-client"
 else
   log_warn "无权限写入 $LINK_DIR，跳过全局安装"
 fi

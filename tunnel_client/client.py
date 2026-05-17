@@ -9,8 +9,8 @@ P2P 策略 (优先级):
   3. 中继模式   — 所有流量经服务端转发 (保底)
 
 用法:
-  pip install tunnel-client
-  tunnel-client --key <认证令牌> --port <本地端口>
+  pip install tunnel-p2p-client
+  tunnel-p2p-client --key <认证令牌> --port <本地端口>
 
   或从源码:
   python -m tunnel_client --key <认证令牌> --port 8080
@@ -577,9 +577,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  tunnel-client --key YOUR_TOKEN --port 8080
-  tunnel-client -k YOUR_TOKEN -p 3000 -s aicq.online:7739
-  tunnel-client -k YOUR_TOKEN -p 80 --no-p2p
+  tunnel-p2p-client --key YOUR_TOKEN --port 8080
+  tunnel-p2p-client -k YOUR_TOKEN -p 3000 -s aicq.online:7739
+  tunnel-p2p-client -k YOUR_TOKEN -p 80 --no-p2p
 
 P2P 模式 (默认启用):
   优先级: IPv6 直连 > UPnP IPv4 > 中继

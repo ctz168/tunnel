@@ -3,8 +3,8 @@
 Tunnel Client - 兼容入口 (薄包装)
 
 推荐使用 pip 安装:
-  pip install tunnel-client
-  tunnel-client --key <认证令牌> --port 8080
+  pip install tunnel-p2p-client
+  tunnel-p2p-client --key <认证令牌> --port 8080
 
 或从源码运行:
   python -m tunnel_client --key <认证令牌> --port 8080

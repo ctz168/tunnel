@@ -5,13 +5,13 @@
 ## 安装
 
 ```bash
-pip install tunnel-client
+pip install tunnel-p2p-client
 ```
 
 ## 使用
 
 ```bash
-tunnel-client --key YOUR_TOKEN --port 8080
+tunnel-p2p-client --key YOUR_TOKEN --port 8080
 ```
 
 ### 参数
@@ -28,9 +28,9 @@ tunnel-client --key YOUR_TOKEN --port 8080
 ### 示例
 
 ```bash
-tunnel-client -k YOUR_TOKEN -p 3000
-tunnel-client -k YOUR_TOKEN -p 80 -s aicq.online:7739
-tunnel-client -k YOUR_TOKEN -p 8080 --no-p2p
+tunnel-p2p-client -k YOUR_TOKEN -p 3000
+tunnel-p2p-client -k YOUR_TOKEN -p 80 -s aicq.online:7739
+tunnel-p2p-client -k YOUR_TOKEN -p 8080 --no-p2p
 ```
 
 ## P2P 模式
