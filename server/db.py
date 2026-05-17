@@ -213,6 +213,12 @@ async def add_log(db: aiosqlite.Connection, tunnel_id: str, action: str,
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (str(uuid.uuid4()), tunnel_id, action, message, ip, bytes_in, bytes_out, _now()),
     )
+    # 每个隧道滚动保留最近 100 条日志
+    await db.execute(
+        "DELETE FROM tunnel_log WHERE tunnel_id = ? AND id NOT IN "
+        "(SELECT id FROM tunnel_log WHERE tunnel_id = ? ORDER BY created_at DESC LIMIT 100)",
+        (tunnel_id, tunnel_id),
+    )
     await db.commit()
 
 
