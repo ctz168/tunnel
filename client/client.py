@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TunnelNet Client - 内网穿透客户端 (Python + aiohttp)
+Tunnel Client - 内网穿透客户端 (Python + aiohttp)
 用法: python client.py --key <认证令牌> --port <本地端口> [--host localhost] [--server aicq.online:7739]
 """
 import argparse
@@ -29,7 +29,7 @@ class TunnelClient:
         self._status_task: asyncio.Task | None = None
 
     async def start(self):
-        print(f"\n  TunnelNet Client v1.0")
+        print(f"\n  Tunnel Client v1.0")
         print(f"  服务器: {self.server}")
         print(f"  密钥:   {self.key[:16]}...")
         print(f"  本地:   {self.local_host}:{self.local_port}\n")
@@ -153,7 +153,7 @@ class TunnelClient:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="TunnelNet Client v1.0")
+    parser = argparse.ArgumentParser(description="Tunnel Client v1.0")
     parser.add_argument("-k", "--key", required=True, help="认证令牌（Dashboard 创建时生成）")
     parser.add_argument("-p", "--port", type=int, required=True, help="本地服务端口")
     parser.add_argument("-s", "--server", default="aicq.online:7739", help="服务器地址 (默认: aicq.online:7739)")

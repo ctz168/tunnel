@@ -1,5 +1,5 @@
 """
-TunnelNet - 数据库操作层 (SQLite + aiosqlite)
+Tunnel - 数据库操作层 (SQLite + aiosqlite)
 """
 import os
 import uuid

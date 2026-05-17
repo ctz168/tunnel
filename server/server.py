@@ -1,5 +1,5 @@
 """
-TunnelNet Server - 基于 aiohttp 的内网穿透服务端
+Tunnel Server - 基于 aiohttp 的内网穿透服务端
 类似 ngrok，用户可通过固定域名 (默认 aicq.online:7739) 将本地服务暴露到公网
 """
 import os
@@ -29,7 +29,7 @@ LOG_FILE = os.path.join(LOG_DIR, "server.log")
 # ======================== 日志配置 ========================
 os.makedirs(LOG_DIR, exist_ok=True)
 
-logger = logging.getLogger("tunnelnet")
+logger = logging.getLogger("tunnel")
 logger.setLevel(logging.DEBUG)
 logger.propagate = False
 
@@ -144,7 +144,7 @@ _DEFAULT_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TunnelNet - 内网穿透服务</title>
+<title>Tunnel - 内网穿透服务</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -160,18 +160,18 @@ _DEFAULT_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <div class="card">
-  <h1>&#x1F310; TunnelNet</h1>
+  <h1>&#x1F310; Tunnel</h1>
   <p class="subtitle">安全、便捷的内网穿透服务</p>
   <p>当前可用域名：<strong id="domain"></strong></p>
   <div class="steps">
     <h3>使用方式</h3>
     <ol>
       <li>通过管理面板创建一个隧道，获取 <b>隧道编码</b> 和 <b>认证令牌</b></li>
-      <li>在本地运行 TunnelNet 客户端，使用令牌连接服务端</li>
+      <li>在本地运行 Tunnel 客户端，使用令牌连接服务端</li>
       <li>访问 <code>http://域名/隧道编码/</code> 即可访问本地服务</li>
     </ol>
   </div>
-  <p class="footer">Powered by TunnelNet &copy; 2025</p>
+  <p class="footer">Powered by Tunnel &copy; 2025</p>
 </div>
 <script>document.getElementById('domain').textContent = location.host || window.__DOMAIN__;</script>
 </body>
@@ -194,7 +194,7 @@ async def on_startup(app: web.Application):
     domain = await _get_server_domain()
     banner = f"""
 ╔══════════════════════════════════════════════════╗
-║              TunnelNet Server 已启动              ║
+║              Tunnel Server 已启动              ║
 ╠══════════════════════════════════════════════════╣
 ║  域名  : {domain:<38s}║
 ║  端口  : {SERVER_PORT:<38d}║
@@ -483,7 +483,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 await asyncio.wait_for(pong_received.wait(), timeout=10)
             except asyncio.TimeoutError:
                 # 心跳超时，关闭连接
-                print(f"[TunnelNet] 隧道 {code} 心跳超时，断开连接")
+                print(f"[Tunnel] 隧道 {code} 心跳超时，断开连接")
                 try:
                     await ws.close(code=4008, message=b"Heartbeat timeout")
                 except Exception:

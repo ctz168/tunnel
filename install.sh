@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#  TunnelNet - 一键部署脚本
+#  Tunnel - 一键部署脚本
 #  绑定域名: aicq.online  端口: 7739
 #  用法: sudo bash install.sh
 #  说明: 在代码仓库目录下运行，直接在当前目录部署
@@ -23,7 +23,7 @@ log_error() { echo -e "${RED}  [ERROR]${NC} $1"; }
 echo ""
 echo "  ╔══════════════════════════════════════════════╗"
 echo "  ║                                              ║"
-echo "  ║     TunnelNet 一键部署                        ║"
+echo "  ║     Tunnel 一键部署                        ║"
 echo "  ║     固定域名内网穿透服务                       ║"
 echo "  ║     域名: ${DOMAIN}  端口: ${PORT}             ║"
 echo "  ║                                              ║"
@@ -102,7 +102,7 @@ print('  数据库初始化完成')
 " 2>&1 || log_warn "数据库将在首次启动时自动初始化"
 
 # ======================== 8. systemd 服务 ========================
-SERVICE_FILE="/etc/systemd/system/tunnelnet.service"
+SERVICE_FILE="/etc/systemd/system/tunnel.service"
 HAS_SYSTEMD=false
 
 if [[ "$OS" == "linux" ]]; then
@@ -117,7 +117,7 @@ if [ "$HAS_SYSTEMD" = true ]; then
   log_info "配置 systemd 服务..."
   cat > "$SERVICE_FILE" << EOF
 [Unit]
-Description=TunnelNet Tunnel Server (${DOMAIN}:${PORT})
+Description=Tunnel Server (${DOMAIN}:${PORT})
 After=network-online.target
 Wants=network-online.target
 
@@ -139,7 +139,7 @@ WantedBy=multi-user.target
 EOF
   chmod 644 "$SERVICE_FILE"
   systemctl daemon-reload
-  systemctl enable tunnelnet 2>/dev/null || true
+  systemctl enable tunnel 2>/dev/null || true
   log_ok "systemd 服务已配置"
 else
   log_warn "systemd 不可用，将使用 nohup 后台启动"
@@ -158,21 +158,21 @@ fi
 # ======================== 10. 启动服务 ========================
 log_info "启动服务..."
 if [ "$HAS_SYSTEMD" = true ]; then
-  systemctl start tunnelnet
+  systemctl start tunnel
   sleep 1
-  if systemctl is-active --quiet tunnelnet; then
-    log_ok "TunnelNet 服务已启动"
+  if systemctl is-active --quiet tunnel; then
+    log_ok "Tunnel 服务已启动"
   else
-    log_warn "systemd 启动失败，请手动检查: journalctl -u tunnelnet -n 20"
+    log_warn "systemd 启动失败，请手动检查: journalctl -u tunnel -n 20"
   fi
 else
   cd "$INSTALL_DIR/server"
   source venv/bin/activate
-  nohup python3 server.py > /tmp/tunnelnet.log 2>&1 &
+  nohup python3 server.py > /tmp/tunnel.log 2>&1 &
   TUNNEL_PID=$!
-  echo "$TUNNEL_PID" > /tmp/tunnelnet.pid
-  log_ok "TunnelNet 已后台启动 (PID: $TUNNEL_PID)"
-  log_info "日志: tail -f /tmp/tunnelnet.log"
+  echo "$TUNNEL_PID" > /tmp/tunnel.pid
+  log_ok "Tunnel 已后台启动 (PID: $TUNNEL_PID)"
+  log_info "日志: tail -f /tmp/tunnel.log"
 fi
 
 # ======================== 完成 ========================
@@ -189,15 +189,15 @@ echo ""
 echo "  ──── 管理命令 ────"
 echo ""
 if [ "$HAS_SYSTEMD" = true ]; then
-  echo "  systemctl start tunnelnet    # 启动"
-  echo "  systemctl stop tunnelnet     # 停止"
-  echo "  systemctl restart tunnelnet  # 重启"
-  echo "  systemctl status tunnelnet   # 状态"
-  echo "  journalctl -u tunnelnet -f   # 日志"
+  echo "  systemctl start tunnel    # 启动"
+  echo "  systemctl stop tunnel     # 停止"
+  echo "  systemctl restart tunnel  # 重启"
+  echo "  systemctl status tunnel   # 状态"
+  echo "  journalctl -u tunnel -f   # 日志"
   echo ""
 else
-  echo "  停止: kill \$(cat /tmp/tunnelnet.pid)"
-  echo "  日志: tail -f /tmp/tunnelnet.log"
+  echo "  停止: kill \$(cat /tmp/tunnel.pid)"
+  echo "  日志: tail -f /tmp/tunnel.log"
   echo ""
 fi
 echo "  ──── 客户端使用 ────"
