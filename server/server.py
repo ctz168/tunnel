@@ -1009,6 +1009,27 @@ def create_app() -> web.Application:
 # ======================== 入口 ========================
 
 if __name__ == "__main__":
+    import socket as _sock
     app = create_app()
-    logger.info(f"启动 http://[::]:{SERVER_PORT} (IPv4/IPv6 双栈)")
-    web.run_app(app, host="::", port=SERVER_PORT, print=None, access_log=None)
+
+    # 同时绑定 IPv4 和 IPv6，确保双栈可用
+    socks = []
+    try:
+        s4 = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s4.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+        s4.bind(("0.0.0.0", SERVER_PORT))
+        socks.append(s4)
+    except OSError as e:
+        logger.warning(f"IPv4 绑定失败: {e}")
+
+    try:
+        s6 = _sock.socket(_sock.AF_INET6, _sock.SOCK_STREAM)
+        s6.setsockopt(_sock.SOL_SOCKET, _sock.SO_REUSEADDR, 1)
+        s6.setsockopt(_sock.IPPROTO_IPV6, _sock.IPV6_V6ONLY, 1)
+        s6.bind(("::", SERVER_PORT))
+        socks.append(s6)
+    except OSError as e:
+        logger.warning(f"IPv6 绑定失败: {e}")
+
+    logger.info(f"启动 http://0.0.0.0:{SERVER_PORT} + http://[::]:{SERVER_PORT} (IPv4/IPv6 双栈)")
+    web.run_app(app, sock=socks, print=None, access_log=None)
