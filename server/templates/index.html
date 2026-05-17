@@ -525,23 +525,29 @@ function renderTunnels() {
     var code = t.code || sid;
     var info = statusMap[code] || {};
     var online = info.online ? true : false;
-    var pubUrl = 'http://' + DOMAIN + '/' + code;
+    var p2pUrl = t.public_url || '';
+    var p2pMode = online && p2pUrl;
+    var pubUrl = p2pUrl || ('http://' + DOMAIN + '/' + code);
     var bytesIn = info.bytes_in || 0;
     var bytesOut = info.bytes_out || 0;
+    var modeTag = p2pMode
+      ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#065f46;color:#6ee7b7;font-weight:600">P2P</span>'
+      : (online ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#1e3a5f;color:#93c5fd;font-weight:600">中继</span>' : '');
 
     html += '<tr>' +
       '<td><strong>' + escapeHtml(t.name || '-') + '</strong>' +
         (t.description ? '<br><span style="font-size:12px;color:var(--text-muted)">' + escapeHtml(t.description) + '</span>' : '') +
       '</td>' +
       '<td style="font-family:monospace;font-size:13px;color:var(--text-muted)">' + escapeHtml(t.code || sid) + '</td>' +
-      '<td style="font-family:monospace;font-size:13px">' + (t.local_host || t.local_port ? escapeHtml((t.local_host || 'localhost') + ':' + t.local_port) : '<span style="color:var(--text-muted);font-size:12px">客户端未连接</span>') + '</td>' +
+      '<td style="font-family:monospace;font-size:13px">' + (t.local_host || t.local_port ? escapeHtml((t.local_host || 'localhost') + ':' + t.local_port) : '<span style="color:var(--text-muted);font-size:12px">未连接</span>') + '</td>' +
       '<td>' +
         '<span class="status">' +
           '<span class="dot ' + (online ? 'dot-online' : 'dot-offline') + '"></span>' +
-          (online ? '在线' : '离线') +
+          (online ? '在线 ' + modeTag : '离线') +
         '</span>' +
       '</td>' +
       '<td class="traffic">' +
+        (p2pMode ? '<span style="font-size:11px;color:var(--success)">P2P 直连</span>' : '') +
         '&#x2B06; <b>' + formatBytes(bytesIn) + '</b><br>&#x2B07; <b>' + formatBytes(bytesOut) + '</b>' +
       '</td>' +
       '<td><div class="public-url">' +

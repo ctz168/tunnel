@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS tunnel (
     local_host  TEXT,
     auth_token  TEXT UNIQUE NOT NULL,
     status      TEXT NOT NULL DEFAULT 'offline',
+    public_url  TEXT,
     description TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
@@ -48,7 +49,7 @@ CREATE TABLE IF NOT EXISTS tunnel_log (
 
 
 async def init_db():
-    """初始化数据库，建表"""
+    """初始化数据库，建表 + 自动迁移"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(_SCHEMA)
@@ -57,6 +58,11 @@ async def init_db():
             "INSERT OR IGNORE INTO server_config (id, domain, updated_at) VALUES (?, ?, ?)",
             ("default", "aicq.online:7739", _now()),
         )
+        # 自动迁移: 给旧表添加 public_url 列
+        cursor = await db.execute("PRAGMA table_info(tunnel)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "public_url" not in columns:
+            await db.execute("ALTER TABLE tunnel ADD COLUMN public_url TEXT")
         await db.commit()
 
 
@@ -98,7 +104,7 @@ def _gen_token() -> str:
 
 async def list_tunnels(db: aiosqlite.Connection) -> list[dict]:
     cursor = await db.execute(
-        "SELECT id, name, code, local_port, local_host, auth_token, status, description, created_at, updated_at "
+        "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, description, created_at, updated_at "
         "FROM tunnel ORDER BY created_at DESC"
     )
     rows = await cursor.fetchall()
@@ -113,7 +119,7 @@ async def get_tunnel(db: aiosqlite.Connection, code: str) -> dict | None:
 
 async def get_tunnel_by_token(db: aiosqlite.Connection, token: str) -> dict | None:
     cursor = await db.execute(
-        "SELECT id, name, code, local_port, local_host, auth_token, status, description, created_at, updated_at "
+        "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, description, created_at, updated_at "
         "FROM tunnel WHERE auth_token = ?", (token,)
     )
     row = await cursor.fetchone()
@@ -127,22 +133,17 @@ async def create_tunnel(db: aiosqlite.Connection, name: str, description: str = 
     tid = str(uuid.uuid4())
     now = _now()
     await db.execute(
-        "INSERT INTO tunnel (id, name, code, local_port, local_host, auth_token, status, description, created_at, updated_at) "
-        "VALUES (?, ?, ?, NULL, NULL, ?, 'offline', ?, ?, ?)",
+        "INSERT INTO tunnel (id, name, code, local_port, local_host, auth_token, status, public_url, description, created_at, updated_at) "
+        "VALUES (?, ?, ?, NULL, NULL, ?, 'offline', NULL, ?, ?, ?)",
         (tid, name, code, token, description, now, now),
     )
     await db.commit()
     return {
-        "id": tid,
-        "name": name,
-        "code": code,
-        "local_port": None,
-        "local_host": None,
-        "auth_token": token,
-        "status": "offline",
-        "description": description,
-        "created_at": now,
-        "updated_at": now,
+        "id": tid, "name": name, "code": code,
+        "local_port": None, "local_host": None,
+        "auth_token": token, "status": "offline",
+        "public_url": None, "description": description,
+        "created_at": now, "updated_at": now,
     }
 
 
@@ -162,10 +163,20 @@ async def update_tunnel_status(db: aiosqlite.Connection, code: str, status: str)
 
 async def update_tunnel_client_info(db: aiosqlite.Connection, code: str,
                                       local_port: int, local_host: str):
-    """客户端连接时上报其本地端口和地址，写入数据库"""
+    """客户端连接时上报其本地端口和地址"""
     await db.execute(
         "UPDATE tunnel SET local_port = ?, local_host = ?, updated_at = ? WHERE code = ?",
         (local_port, local_host, _now(), code),
+    )
+    await db.commit()
+
+
+async def update_tunnel_public_url(db: aiosqlite.Connection, code: str,
+                                     public_url: str | None):
+    """更新隧道的 P2P 公网地址（UPnP 成功后由客户端上报）"""
+    await db.execute(
+        "UPDATE tunnel SET public_url = ?, updated_at = ? WHERE code = ?",
+        (public_url, _now(), code),
     )
     await db.commit()
 
@@ -213,7 +224,8 @@ def _row_to_tunnel(row) -> dict:
         "local_host": row[4],
         "auth_token": row[5],
         "status": row[6],
-        "description": row[7] or "",
-        "created_at": row[8],
-        "updated_at": row[9],
+        "public_url": row[7],
+        "description": row[8] or "",
+        "created_at": row[9],
+        "updated_at": row[10],
     }

@@ -570,7 +570,11 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
         "type": "connected",
         "tunnel_code": code,
         "public_url": f"http://{domain}/{code}",
+        "client_ip": peer_ip,
     })
+
+    # 清除旧的 P2P 地址（客户端重连后需要重新上报）
+    await tunnel_db.update_tunnel_public_url(db, code, None)
 
     # 记录连接日志
     peer_ip = request.remote or ""
@@ -634,6 +638,16 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                             logger.info(f"隧道 {code} 客户端上报地址: {c_host}:{c_port}")
                         except Exception as e:
                             logger.error(f"更新隧道 {code} 客户端信息失败: {e}")
+
+                elif msg_type == "p2p_info":
+                    # 客户端上报 P2P 公网地址（UPnP 成功）
+                    p2p_url = data.get("public_url", "").strip()
+                    if p2p_url:
+                        try:
+                            await tunnel_db.update_tunnel_public_url(db, code, p2p_url)
+                            logger.info(f"隧道 {code} P2P 已启用: {p2p_url}")
+                        except Exception as e:
+                            logger.error(f"更新隧道 {code} P2P 地址失败: {e}")
 
                 elif msg_type == "response":
                     # 收到隧道客户端返回的 HTTP 响应
@@ -701,7 +715,21 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
 
     code = first_segment
 
-    # 检查隧道是否在线
+    # 查找隧道信息
+    tunnels_list = await tunnel_db.list_tunnels(_get_db())
+    target = next((t for t in tunnels_list if t["code"] == code), None)
+
+    # P2P 模式：如果有公网地址，直接 302 重定向（不经过服务器中转）
+    if target and target.get("public_url"):
+        sub_path = path_info[len(first_segment):]
+        if not sub_path:
+            sub_path = "/"
+        p2p_url = target["public_url"].rstrip("/") + sub_path
+        if request.query_string:
+            p2p_url += "?" + request.query_string
+        raise web.HTTPFound(p2p_url)
+
+    # 中继模式：检查隧道是否在线
     ws = active_tunnels.get(code)
     if not ws or ws.closed:
         return web.json_response(
