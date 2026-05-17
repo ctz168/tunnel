@@ -1,15 +1,12 @@
 """
 Tunnel - 数据库操作层 (SQLite + aiosqlite)
 """
-from __future__ import annotations
-
 import os
 import uuid
 import secrets
 import string
 from datetime import datetime
-
-from __future__ import annotations
+from typing import Optional
 
 import aiosqlite
 
@@ -109,7 +106,7 @@ def _gen_token() -> str:
     return secrets.token_urlsafe(24)
 
 
-async def list_tunnels(db: aiosqlite.Connection) -> list[dict]:
+async def list_tunnels(db: aiosqlite.Connection) -> list:
     cursor = await db.execute(
         "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, p2p_info, description, created_at, updated_at "
         "FROM tunnel ORDER BY created_at DESC"
@@ -118,7 +115,7 @@ async def list_tunnels(db: aiosqlite.Connection) -> list[dict]:
     return [_row_to_tunnel(r) for r in rows]
 
 
-async def get_tunnel(db: aiosqlite.Connection, code: str) -> dict | None:
+async def get_tunnel(db: aiosqlite.Connection, code: str) -> Optional[dict]:
     cursor = await db.execute(
         "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, p2p_info, description, created_at, updated_at "
         "FROM tunnel WHERE code = ?", (code.upper(),)
@@ -127,7 +124,7 @@ async def get_tunnel(db: aiosqlite.Connection, code: str) -> dict | None:
     return _row_to_tunnel(row) if row else None
 
 
-async def get_tunnel_by_token(db: aiosqlite.Connection, token: str) -> dict | None:
+async def get_tunnel_by_token(db: aiosqlite.Connection, token: str) -> Optional[dict]:
     cursor = await db.execute(
         "SELECT id, name, code, local_port, local_host, auth_token, status, public_url, p2p_info, description, created_at, updated_at "
         "FROM tunnel WHERE auth_token = ?", (token,)
@@ -137,7 +134,7 @@ async def get_tunnel_by_token(db: aiosqlite.Connection, token: str) -> dict | No
 
 
 async def create_tunnel(db: aiosqlite.Connection, name: str, description: str = "",
-                       auth_token: str | None = None) -> dict:
+                       auth_token: Optional[str] = None) -> dict:
     code = _gen_code()
     token = auth_token if auth_token else _gen_token()
     tid = str(uuid.uuid4())
@@ -182,7 +179,7 @@ async def update_tunnel_client_info(db: aiosqlite.Connection, code: str,
 
 
 async def update_tunnel_public_url(db: aiosqlite.Connection, code: str,
-                                     public_url: str | None):
+                                     public_url: Optional[str]):
     """更新隧道的 P2P 公网地址（UPnP 成功后由客户端上报）"""
     await db.execute(
         "UPDATE tunnel SET public_url = ?, updated_at = ? WHERE code = ?",
@@ -192,7 +189,7 @@ async def update_tunnel_public_url(db: aiosqlite.Connection, code: str,
 
 
 async def update_tunnel_p2p_info(db: aiosqlite.Connection, code: str,
-                                   p2p_info: str | None, public_url: str | None = None):
+                                   p2p_info: Optional[str], public_url: Optional[str] = None):
     """更新隧道的 P2P 详细信息 (JSON 格式)"""
     if public_url is not None:
         await db.execute(
@@ -219,7 +216,7 @@ async def add_log(db: aiosqlite.Connection, tunnel_id: str, action: str,
     await db.commit()
 
 
-async def get_logs(db: aiosqlite.Connection, tunnel_id: str, limit: int = 100) -> list[dict]:
+async def get_logs(db: aiosqlite.Connection, tunnel_id: str, limit: int = 100) -> list:
     cursor = await db.execute(
         "SELECT id, action, message, ip, bytes_in, bytes_out, created_at "
         "FROM tunnel_log WHERE tunnel_id = ? ORDER BY created_at DESC LIMIT ?",
