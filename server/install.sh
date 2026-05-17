@@ -1,17 +1,18 @@
 #!/bin/bash
 # ============================================================
-#  Tunnel - 一键部署脚本
+#  Tunnel Server - 一键部署脚本
 #  绑定域名: aicq.online  端口: 7739
-#  用法: sudo bash install.sh
-#  说明: 在代码仓库目录下运行，直接在当前目录部署
+#  用法: cd server && sudo bash install.sh
 # ============================================================
 set -e
 
 DOMAIN="aicq.online"
 PORT="7739"
 
-# 安装目录 = install.sh 所在目录（即代码仓库根目录）
+# 安装目录 = install.sh 所在目录（即 server/）
 INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
+# 项目根目录 = server/ 的上级
+PROJECT_DIR="$(cd "$INSTALL_DIR/.." && pwd)"
 REAL_USER="${SUDO_USER:-$(whoami)}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -23,7 +24,7 @@ log_error() { echo -e "${RED}  [ERROR]${NC} $1"; }
 echo ""
 echo "  ╔══════════════════════════════════════════════╗"
 echo "  ║                                              ║"
-echo "  ║     Tunnel 一键部署                        ║"
+echo "  ║     Tunnel Server 一键部署                    ║"
 echo "  ║     固定域名内网穿透服务                       ║"
 echo "  ║     域名: ${DOMAIN}  端口: ${PORT}             ║"
 echo "  ║                                              ║"
@@ -41,7 +42,8 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then OS="macos"
 else OS="unknown"; fi
 log_ok "系统: $OS"
 log_info "安装用户: $REAL_USER"
-log_info "安装目录: $INSTALL_DIR"
+log_info "项目目录: $PROJECT_DIR"
+log_info "服务目录: $INSTALL_DIR"
 
 # ======================== 2. 端口检查 ========================
 log_info "检查端口 ${PORT}..."
@@ -68,16 +70,20 @@ log_ok "系统依赖安装完成"
 
 # ======================== 4. 确认代码 ========================
 log_info "确认代码..."
-if [ ! -f "$INSTALL_DIR/server/server.py" ]; then
-  log_error "找不到 server/server.py，请在代码仓库根目录运行此脚本"
+if [ ! -f "$INSTALL_DIR/server.py" ]; then
+  log_error "找不到 server.py，请在 server/ 目录下运行此脚本"
   exit 1
 fi
-chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR" 2>/dev/null || true
+if [ ! -f "$INSTALL_DIR/db.py" ]; then
+  log_error "找不到 db.py"
+  exit 1
+fi
+chown -R "$REAL_USER:$REAL_USER" "$PROJECT_DIR" 2>/dev/null || true
 log_ok "代码目录: $INSTALL_DIR"
 
 # ======================== 5. Python 虚拟环境 ========================
 log_info "创建 Python 虚拟环境..."
-cd "$INSTALL_DIR/server"
+cd "$INSTALL_DIR"
 if [ ! -d "venv" ]; then
   python3 -m venv venv
 fi
@@ -91,9 +97,9 @@ log_ok "Python 依赖安装完成"
 
 # ======================== 7. 初始化数据库 ========================
 log_info "初始化数据库..."
-mkdir -p "$INSTALL_DIR/data"
-chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR/data" 2>/dev/null || true
-DB_PATH="$INSTALL_DIR/data/tunnel.db" python3 -c "
+mkdir -p "$PROJECT_DIR/data"
+chown -R "$REAL_USER:$REAL_USER" "$PROJECT_DIR/data" 2>/dev/null || true
+DB_PATH="$PROJECT_DIR/data/tunnel.db" python3 -c "
 import asyncio, sys
 sys.path.insert(0, '.')
 import db
@@ -105,12 +111,18 @@ print('  数据库初始化完成')
 SERVICE_FILE="/etc/systemd/system/tunnel.service"
 HAS_SYSTEMD=false
 
-if [[ "$OS" == "linux" ]]; then
-  if [ -x "/bin/systemctl" ] || [ -x "/usr/bin/systemctl" ] || [ -x "/usr/sbin/systemctl" ]; then
-    HAS_SYSTEMD=true
-  elif command -v systemctl &>/dev/null; then
-    HAS_SYSTEMD=true
-  fi
+# 检测 systemd（在 sudo 环境下需要检查完整路径）
+if [ -x "/usr/bin/systemctl" ] || [ -x "/bin/systemctl" ] || [ -x "/usr/sbin/systemctl" ]; then
+  HAS_SYSTEMD=true
+elif [ -x "/usr/sbin/systemd" ]; then
+  HAS_SYSTEMD=true
+fi
+
+SYSTEMCTL_CMD="systemctl"
+if [ -x "/usr/bin/systemctl" ]; then
+  SYSTEMCTL_CMD="/usr/bin/systemctl"
+elif [ -x "/bin/systemctl" ]; then
+  SYSTEMCTL_CMD="/bin/systemctl"
 fi
 
 if [ "$HAS_SYSTEMD" = true ]; then
@@ -125,10 +137,10 @@ Wants=network-online.target
 Type=simple
 User=${REAL_USER}
 Group=${REAL_USER}
-WorkingDirectory=${INSTALL_DIR}/server
-Environment=DB_PATH=${INSTALL_DIR}/data/tunnel.db
+WorkingDirectory=${INSTALL_DIR}
+Environment=DB_PATH=${PROJECT_DIR}/data/tunnel.db
 Environment=SERVER_PORT=${PORT}
-ExecStart=${INSTALL_DIR}/server/venv/bin/python3 server.py
+ExecStart=${INSTALL_DIR}/venv/bin/python3 server.py
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -138,9 +150,9 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
   chmod 644 "$SERVICE_FILE"
-  systemctl daemon-reload
-  systemctl enable tunnel 2>/dev/null || true
-  log_ok "systemd 服务已配置"
+  $SYSTEMCTL_CMD daemon-reload
+  $SYSTEMCTL_CMD enable tunnel 2>/dev/null || true
+  log_ok "systemd 服务已配置 ($SYSTEMCTL_CMD)"
 else
   log_warn "systemd 不可用，将使用 nohup 后台启动"
 fi
@@ -158,15 +170,21 @@ fi
 # ======================== 10. 启动服务 ========================
 log_info "启动服务..."
 if [ "$HAS_SYSTEMD" = true ]; then
-  systemctl start tunnel
+  $SYSTEMCTL_CMD restart tunnel
   sleep 1
-  if systemctl is-active --quiet tunnel; then
-    log_ok "Tunnel 服务已启动"
+  if $SYSTEMCTL_CMD is-active --quiet tunnel; then
+    log_ok "Tunnel 服务已启动 (systemd)"
   else
-    log_warn "systemd 启动失败，请手动检查: journalctl -u tunnel -n 20"
+    log_warn "systemd 启动失败，尝试 nohup..."
+    cd "$INSTALL_DIR"
+    source venv/bin/activate
+    nohup python3 server.py > /tmp/tunnel.log 2>&1 &
+    TUNNEL_PID=$!
+    echo "$TUNNEL_PID" > /tmp/tunnel.pid
+    log_ok "Tunnel 已后台启动 (PID: $TUNNEL_PID)"
   fi
 else
-  cd "$INSTALL_DIR/server"
+  cd "$INSTALL_DIR"
   source venv/bin/activate
   nohup python3 server.py > /tmp/tunnel.log 2>&1 &
   TUNNEL_PID=$!
@@ -189,11 +207,11 @@ echo ""
 echo "  ──── 管理命令 ────"
 echo ""
 if [ "$HAS_SYSTEMD" = true ]; then
-  echo "  systemctl start tunnel    # 启动"
-  echo "  systemctl stop tunnel     # 停止"
-  echo "  systemctl restart tunnel  # 重启"
-  echo "  systemctl status tunnel   # 状态"
-  echo "  journalctl -u tunnel -f   # 日志"
+  echo "  $SYSTEMCTL_CMD start tunnel    # 启动"
+  echo "  $SYSTEMCTL_CMD stop tunnel     # 停止"
+  echo "  $SYSTEMCTL_CMD restart tunnel  # 重启"
+  echo "  $SYSTEMCTL_CMD status tunnel   # 状态"
+  echo "  journalctl -u tunnel -f        # 日志"
   echo ""
 else
   echo "  停止: kill \$(cat /tmp/tunnel.pid)"
