@@ -227,6 +227,10 @@
         <input type="text" id="cName" placeholder="例如: my-web">
       </div>
       <div class="form-group">
+        <label>认证令牌 <span style="font-weight:400;color:var(--text-muted)">（留空自动生成）</span></label>
+        <input type="text" id="cToken" placeholder="自定义令牌，留空则自动生成">
+      </div>
+      <div class="form-group">
         <label>描述</label>
         <textarea id="cDesc" placeholder="可选，描述该隧道用途"></textarea>
       </div>
@@ -615,6 +619,7 @@ function openCreateModal() {
   document.getElementById('createResultArea').style.display = 'none';
   document.getElementById('createSubmitBtn').style.display = '';
   document.getElementById('cName').value = '';
+  document.getElementById('cToken').value = '';
   document.getElementById('cDesc').value = '';
   document.getElementById('cName').focus();
 }
@@ -625,18 +630,23 @@ function closeCreateModal() {
 
 function createTunnel() {
   var name = document.getElementById('cName').value.trim();
+  var token = document.getElementById('cToken').value.trim();
   var desc = document.getElementById('cDesc').value.trim();
 
   if (!name) { showToast('请输入隧道名称', 'error'); return; }
+  if (token && token.length < 4) { showToast('自定义令牌长度至少 4 位', 'error'); return; }
 
   var btn = document.getElementById('createSubmitBtn');
   btn.disabled = true;
   btn.textContent = '创建中...';
 
+  var payload = { name: name, description: desc };
+  if (token) payload.auth_token = token;
+
   fetch('/api/tunnels', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name, description: desc })
+    body: JSON.stringify(payload)
   })
   .then(function(r) { return r.json(); })
   .then(function(data) {

@@ -120,9 +120,10 @@ async def get_tunnel_by_token(db: aiosqlite.Connection, token: str) -> dict | No
     return _row_to_tunnel(row) if row else None
 
 
-async def create_tunnel(db: aiosqlite.Connection, name: str, description: str = "") -> dict:
+async def create_tunnel(db: aiosqlite.Connection, name: str, description: str = "",
+                       auth_token: str | None = None) -> dict:
     code = _gen_code()
-    token = _gen_token()
+    token = auth_token if auth_token else _gen_token()
     tid = str(uuid.uuid4())
     now = _now()
     await db.execute(

@@ -426,13 +426,16 @@ async def create_tunnel_handler(request: web.Request) -> web.Response:
 
     name = body.get("name", "").strip()
     description = body.get("description", "").strip()
+    auth_token = body.get("auth_token", "").strip() or None
 
     # 参数校验
     if not name:
         return web.json_response({"error": "缺少 name 字段"}, status=400)
+    if auth_token and len(auth_token) < 4:
+        return web.json_response({"error": "自定义令牌长度至少 4 位"}, status=400)
 
     tunnel = await tunnel_db.create_tunnel(
-        _get_db(), name=name, description=description,
+        _get_db(), name=name, description=description, auth_token=auth_token,
     )
 
     # 记录日志
