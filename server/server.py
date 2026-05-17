@@ -494,8 +494,18 @@ async def get_tunnel_status_handler(request: web.Request) -> web.Response:
     domain = await _get_server_domain()
 
     # 从内存中的 tunnel_meta 获取实时统计数据
+    # 同时检查 WebSocket 是否真的还活着（兜底清理）
     status_map: dict[str, dict] = {}
+    stale_codes = []
     for code, meta in tunnel_meta.items():
+        ws_conn = active_tunnels.get(code)
+        if ws_conn and ws_conn.closed:
+            # WebSocket 已关闭但内存状态未清理，标记为需要清理
+            stale_codes.append(code)
+            continue
+        if not ws_conn:
+            stale_codes.append(code)
+            continue
         status_map[code] = {
             "online": True,
             "connected_at": meta.get("connected_at", ""),
@@ -503,6 +513,16 @@ async def get_tunnel_status_handler(request: web.Request) -> web.Response:
             "bytes_out": meta.get("bytes_out", 0),
             "request_count": meta.get("request_count", 0),
         }
+
+    # 清理已断开但未从内存中移除的隧道
+    for code in stale_codes:
+        tunnel_meta.pop(code, None)
+        tunnel_ws_info.pop(code, None)
+        # 同步更新数据库状态
+        try:
+            await tunnel_db.update_tunnel_status(_get_db(), code, "offline")
+        except Exception:
+            pass
 
     return web.json_response({
         "tunnels": status_map,
@@ -591,9 +611,9 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     pong_received = asyncio.Event()
 
     async def heartbeat_loop():
-        """每 30 秒发送 ping，10 秒内未收到 pong 则关闭连接"""
+        """每 15 秒发送 ping，8 秒内未收到 pong 则关闭连接"""
         while not ws.closed:
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)
             if ws.closed:
                 break
             pong_received.clear()
@@ -601,9 +621,9 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 await ws.send_json({"type": "ping"})
             except Exception:
                 break
-            # 等待 10 秒内收到 pong
+            # 等待 8 秒内收到 pong
             try:
-                await asyncio.wait_for(pong_received.wait(), timeout=10)
+                await asyncio.wait_for(pong_received.wait(), timeout=8)
             except asyncio.TimeoutError:
                 # 心跳超时，关闭连接
                 print(f"[Tunnel] 隧道 {code} 心跳超时，断开连接")
