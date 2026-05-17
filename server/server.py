@@ -73,6 +73,9 @@ tunnel_meta: dict[str, dict] = {}
 # 待处理的隧道请求 Future：request_id -> asyncio.Future
 pending_requests: dict[str, asyncio.Future] = {}
 
+# 管理面板 SSE 长连接集合（用于推送隧道上下线事件）
+admin_sse_clients: set[web.StreamResponse] = set()
+
 # 全局数据库连接
 _db: aiosqlite.Connection | None = None
 
@@ -215,6 +218,19 @@ async def on_startup(app: web.Application):
     print(banner)
 
 
+async def _broadcast_sse(event: str, data: dict):
+    """向所有管理面板 SSE 客户端广播事件"""
+    payload = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    dead = []
+    for resp in admin_sse_clients:
+        try:
+            resp.write(payload.encode("utf-8"))
+        except Exception:
+            dead.append(resp)
+    for resp in dead:
+        admin_sse_clients.discard(resp)
+
+
 async def on_cleanup(app: web.Application):
     """服务关闭时清理所有资源"""
     global _db
@@ -228,6 +244,15 @@ async def on_cleanup(app: web.Application):
     active_tunnels.clear()
     tunnel_ws_info.clear()
     tunnel_meta.clear()
+
+    # 关闭所有 SSE 连接
+    for resp in list(admin_sse_clients):
+        try:
+            await resp.write(b"event: server_shutdown\ndata: {}\n\n")
+            resp.force_close()
+        except Exception:
+            pass
+    admin_sse_clients.clear()
 
     # 取消所有待处理请求
     for req_id, future in list(pending_requests.items()):
@@ -490,44 +515,55 @@ async def get_logs_handler(request: web.Request) -> web.Response:
 
 
 async def get_tunnel_status_handler(request: web.Request) -> web.Response:
-    """GET /api/tunnel-status — 获取所有隧道的实时状态（含在线统计）"""
-    domain = await _get_server_domain()
-
-    # 从内存中的 tunnel_meta 获取实时统计数据
-    # 同时检查 WebSocket 是否真的还活着（兜底清理）
+    """GET /api/tunnel-status — 获取所有隧道的实时状态（轻量，仅读内存）"""
     status_map: dict[str, dict] = {}
-    stale_codes = []
     for code, meta in tunnel_meta.items():
         ws_conn = active_tunnels.get(code)
-        if ws_conn and ws_conn.closed:
-            # WebSocket 已关闭但内存状态未清理，标记为需要清理
-            stale_codes.append(code)
-            continue
-        if not ws_conn:
-            stale_codes.append(code)
-            continue
-        status_map[code] = {
-            "online": True,
-            "connected_at": meta.get("connected_at", ""),
-            "bytes_in": meta.get("bytes_in", 0),
-            "bytes_out": meta.get("bytes_out", 0),
-            "request_count": meta.get("request_count", 0),
-        }
+        if ws_conn and not ws_conn.closed:
+            status_map[code] = {
+                "online": True,
+                "connected_at": meta.get("connected_at", ""),
+                "bytes_in": meta.get("bytes_in", 0),
+                "bytes_out": meta.get("bytes_out", 0),
+                "request_count": meta.get("request_count", 0),
+            }
+    return web.json_response({"tunnels": status_map})
 
-    # 清理已断开但未从内存中移除的隧道
-    for code in stale_codes:
-        tunnel_meta.pop(code, None)
-        tunnel_ws_info.pop(code, None)
-        # 同步更新数据库状态
-        try:
-            await tunnel_db.update_tunnel_status(_get_db(), code, "offline")
-        except Exception:
-            pass
 
-    return web.json_response({
-        "tunnels": status_map,
-        "domain": domain,
-    })
+async def events_handler(request: web.Request) -> web.StreamResponse:
+    """GET /api/events — SSE 长连接，推送隧道上下线事件（替代高频轮询）"""
+    if not _check_session(request):
+        return web.json_response({"error": "未登录"}, status=401)
+
+    resp = web.StreamResponse()
+    resp.content_type = "text/event-stream"
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["Connection"] = "keep-alive"
+    resp.headers["X-Accel-Buffering"] = "no"
+    await resp.prepare(request)
+
+    # 发送初始连接确认
+    await resp.write(b"event: connected\ndata: {\"status\":\"ok\"}\n\n")
+
+    # 将此连接加入 SSE 客户端集合
+    admin_sse_clients.add(resp)
+    logger.debug(f"SSE 管理客户端已连接，当前 {len(admin_sse_clients)} 个")
+
+    try:
+        # 保持连接，定期发心跳防止代理/CDN 断开
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await resp.write(b":keepalive\n\n")
+            except Exception:
+                break
+    except (asyncio.CancelledError, ConnectionResetError):
+        pass
+    finally:
+        admin_sse_clients.discard(resp)
+        logger.debug(f"SSE 管理客户端已断开，剩余 {len(admin_sse_clients)} 个")
+
+    return resp
 
 
 # ======================== WebSocket 隧道端点 ========================
@@ -585,6 +621,13 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
 
     # 更新数据库状态为在线
     await tunnel_db.update_tunnel_status(db, code, "online")
+
+    # 通知管理面板：隧道上线
+    await _broadcast_sse("tunnel_online", {
+        "code": code,
+        "name": tunnel["name"],
+        "tunnel_id": tunnel["id"],
+    })
 
     # 记录客户端 IP (必须在 send_json 之前获取)
     peer_ip = request.remote or ""
@@ -727,6 +770,13 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 )
             except Exception:
                 pass
+
+            # 通知管理面板：隧道下线
+            await _broadcast_sse("tunnel_offline", {
+                "code": code,
+                "name": tunnel["name"],
+                "tunnel_id": tunnel["id"],
+            })
 
         # 释放该隧道所有待处理的请求（避免请求端永久挂起）
         for req_id in list(pending_requests.keys()):
@@ -1001,6 +1051,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/tunnels/{tunnel_id}/logs", get_logs_handler)
     app.router.add_get("/api/tunnels/{tunnel_id}/token", get_tunnel_token_handler)
     app.router.add_get("/api/tunnel-status", get_tunnel_status_handler)
+    app.router.add_get("/api/events", events_handler)
 
     # ---- 认证路由 ----
     app.router.add_get("/api/auth/check", auth_check_handler)

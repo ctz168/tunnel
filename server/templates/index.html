@@ -445,6 +445,8 @@ let tunnels = [];
 let statusMap = {};
 let isLoggedIn = false;
 let authChecked = false;
+let eventSource = null;  // SSE 连接
+let sseReconnectTimer = null;  // SSE 重连定时器
 
 /* ── Auth ── */
 function checkAuth() {
@@ -485,10 +487,51 @@ function showApp() {
   document.getElementById('authSetup').style.display = 'none';
   document.getElementById('authLogin').style.display = 'none';
   document.getElementById('mainApp').style.display = '';
+  // 初始加载一次隧道列表和状态
   fetchTunnels();
   fetchTunnelStatus();
-  setInterval(fetchTunnels, 5000);
-  setInterval(fetchTunnelStatus, 5000);
+  // 建立 SSE 长连接，接收上下线事件推送
+  connectSSE();
+}
+
+function disconnectSSE() {
+  if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
+  if (eventSource) { eventSource.close(); eventSource = null; }
+}
+
+function connectSSE() {
+  disconnectSSE();
+  // EventSource 只支持 GET，通过 cookie 传递登录态
+  eventSource = new EventSource('/api/events');
+  eventSource.addEventListener('connected', function() {
+    // SSE 连接成功，刷新一次数据
+    fetchTunnels();
+    fetchTunnelStatus();
+  });
+  eventSource.addEventListener('tunnel_online', function(e) {
+    var d = JSON.parse(e.data);
+    showToast('隧道 ' + d.name + ' (' + d.code + ') 已上线', 'success');
+    fetchTunnels();
+    fetchTunnelStatus();
+  });
+  eventSource.addEventListener('tunnel_offline', function(e) {
+    var d = JSON.parse(e.data);
+    showToast('隧道 ' + d.name + ' (' + d.code + ') 已离线', 'info');
+    fetchTunnels();
+    fetchTunnelStatus();
+  });
+  eventSource.addEventListener('server_shutdown', function() {
+    showToast('服务端已关闭', 'error');
+    eventSource.close();
+  });
+  eventSource.onerror = function() {
+    eventSource.close();
+    eventSource = null;
+    // 5 秒后自动重连
+    if (isLoggedIn) {
+      sseReconnectTimer = setTimeout(connectSSE, 5000);
+    }
+  };
 }
 
 function doSetup() {
@@ -535,6 +578,7 @@ function doLogin() {
 }
 
 function doLogout() {
+  disconnectSSE();
   fetch('/api/auth/logout', { method: 'POST' })
     .then(function() {
       isLoggedIn = false;
