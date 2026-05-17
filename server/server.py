@@ -4,10 +4,13 @@ TunnelNet Server - 基于 aiohttp 的内网穿透服务端
 """
 import os
 import re
+import sys
 import json
 import asyncio
 import base64
 import uuid
+import logging
+import traceback
 from datetime import datetime, timezone
 
 from aiohttp import web
@@ -20,6 +23,32 @@ import db as tunnel_db
 # ======================== 配置 ========================
 DB_PATH = os.environ.get("DB_PATH", "data/tunnel.db")
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "7739"))
+LOG_DIR = os.environ.get("LOG_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
+LOG_FILE = os.path.join(LOG_DIR, "server.log")
+
+# ======================== 日志配置 ========================
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logger = logging.getLogger("tunnelnet")
+logger.setLevel(logging.DEBUG)
+logger.propagate = False
+
+# 文件 handler（全量日志）
+_fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+_fh.setLevel(logging.DEBUG)
+_fh.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+))
+logger.addHandler(_fh)
+
+# 控制台 handler（INFO+）
+_ch = logging.StreamHandler(sys.stdout)
+_ch.setLevel(logging.INFO)
+_ch.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
+logger.addHandler(_ch)
+
+logger.info(f"日志文件: {LOG_FILE}")
 
 # ======================== 全局状态 ========================
 # 活跃的 WebSocket 隧道连接：code -> WebSocket
@@ -171,6 +200,8 @@ async def on_startup(app: web.Application):
 ║  端口  : {SERVER_PORT:<38d}║
 ║  地址  : http://0.0.0.0:{SERVER_PORT:<27d}║
 ╚══════════════════════════════════════════════════╝"""
+    logger.info(f"域名: {domain}  端口: {SERVER_PORT}")
+    logger.info(f"地址: http://0.0.0.0:{SERVER_PORT}")
     print(banner)
 
 
@@ -202,7 +233,7 @@ async def on_cleanup(app: web.Application):
             pass
         _db = None
 
-    print("[TunnelNet] 服务已停止，资源已释放。")
+    logger.info("服务已停止，资源已释放。")
 
 
 # ======================== 页面路由 ========================
@@ -215,6 +246,7 @@ async def index_handler(request: web.Request) -> web.Response:
         html = tpl.render(domain=domain)
         return web.Response(text=html, content_type="text/html; charset=utf-8")
     except Exception:
+        logger.exception("模板渲染失败")
         # 模板加载失败时返回内嵌默认页
         html = _DEFAULT_HTML.replace("window.__DOMAIN__", f"'{domain}'")
         return web.Response(text=html, content_type="text/html; charset=utf-8")
@@ -630,6 +662,7 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
     except asyncio.CancelledError:
         return web.json_response({"error": "Request cancelled"}, status=499)
     except Exception as e:
+        logger.exception(f"隧道转发异常 [{code}]")
         return web.json_response(
             {"error": "Internal Server Error", "message": str(e)},
             status=500,
@@ -641,9 +674,21 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
 
 # ======================== 应用工厂 ========================
 
+async def on_error_page(request: web.Request) -> web.Response:
+    """全局错误兜底 — 捕获所有未处理的 500 错误"""
+    status = request.match_info.get("status", "500")
+    logger.error(f"未处理异常: {status} {request.method} {request.url}")
+    return web.Response(
+        text=f"<h1>Server Error {status}</h1><p>请查看 data/server.log 获取详情</p>",
+        content_type="text/html; charset=utf-8",
+        status=int(status),
+    )
+
+
 def create_app() -> web.Application:
     """创建并配置 aiohttp 应用"""
     app = web.Application()
+    app["logger"] = logger
 
     # 注册生命周期钩子
     app.on_startup.append(on_startup)
@@ -664,9 +709,14 @@ def create_app() -> web.Application:
     # ---- WebSocket 隧道端点 ----
     app.router.add_get("/ws", websocket_handler)
 
+    # ---- 500 错误日志页面 ----
+    app.router.add_route("*", "/_error/{status}", on_error_page)
+
     # ---- HTTP 反向代理（兜底路由，必须放在最后）----
     # 匹配所有未被上述路由捕获的路径，判断首段是否为隧道编码
     app.router.add_route("*", "/{path_info:.+}", tunnel_request_handler)
+
+    logger.info("路由注册完成")
 
     return app
 
@@ -675,4 +725,5 @@ def create_app() -> web.Application:
 
 if __name__ == "__main__":
     app = create_app()
-    web.run_app(app, host="0.0.0.0", port=SERVER_PORT, print=None)
+    logger.info(f"启动 http://0.0.0.0:{SERVER_PORT}")
+    web.run_app(app, host="0.0.0.0", port=SERVER_PORT, print=None, access_log=None)
