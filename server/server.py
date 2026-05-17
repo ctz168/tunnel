@@ -7,6 +7,7 @@ import re
 import sys
 import json
 import time
+from functools import partial
 import secrets
 import asyncio
 import base64
@@ -870,6 +871,7 @@ def create_app() -> web.Application:
     """创建并配置 aiohttp 应用"""
     app = web.Application(middlewares=[error_middleware])
     app["logger"] = logger
+    app["json_dumps"] = partial(json.dumps, ensure_ascii=False)
 
     # 注册生命周期钩子
     app.on_startup.append(on_startup)
