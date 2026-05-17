@@ -254,12 +254,12 @@ async def index_handler(request: web.Request) -> web.Response:
     try:
         tpl = _get_template_env().get_template("index.html")
         html = tpl.render(domain=domain)
-        return web.Response(text=html, content_type="text/html", charset="utf-8")
+        return web.Response(text=html, content_type="text/html")
     except Exception:
         logger.exception("模板渲染失败")
         # 模板加载失败时返回内嵌默认页
         html = _DEFAULT_HTML.replace("window.__DOMAIN__", f"'{domain}'")
-        return web.Response(text=html, content_type="text/html", charset="utf-8")
+        return web.Response(text=html, content_type="text/html")
 
 
 # ======================== 认证 API ========================
@@ -733,7 +733,7 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
     if not CODE_RE.match(first_segment):
         return web.Response(
             text=_DEFAULT_HTML,
-            content_type="text/html", charset="utf-8",
+            content_type="text/html",
         )
 
     code = first_segment
@@ -915,7 +915,7 @@ h1{{color:#e74c3c}}pre{{background:#16213e;padding:16px;border-radius:8px;overfl
 <p>Path: {request.method} {request.path}</p>
 <p>请查看 <code>data/server.log</code> 获取详细信息</p>
 <hr><pre>{traceback.format_exc()}</pre></body></html>""",
-            content_type="text/html", charset="utf-8",
+            content_type="text/html",
             status=500,
         )
 
@@ -938,7 +938,7 @@ async def debug_logs_handler(request: web.Request) -> web.Response:
 pre{{background:#1e293b;padding:16px;border-radius:8px;overflow:auto;white-space:pre-wrap;font-size:13px;line-height:1.6}}</style></head>
 <body><h2>Server Logs ({LOG_FILE})</h2>
 <pre>{content}</pre></body></html>""",
-                content_type="text/html", charset="utf-8",
+                content_type="text/html",
             )
         else:
             return web.Response(text=f"日志文件不存在: {LOG_FILE}", status=404)
@@ -954,7 +954,7 @@ async def on_error_page(request: web.Request) -> web.Response:
     logger.error(f"未处理异常: {status} {request.method} {request.url}")
     return web.Response(
         text=f"<h1>Server Error {status}</h1><p>请查看 data/server.log 获取详情</p>",
-        content_type="text/html", charset="utf-8",
+        content_type="text/html",
         status=int(status),
     )
 
