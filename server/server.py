@@ -654,9 +654,9 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     pong_received = asyncio.Event()
 
     async def heartbeat_loop():
-        """每 15 秒发送 ping，8 秒内未收到 pong 则关闭连接"""
+        """每 30 秒发送 ping，30 秒内未收到 pong 则关闭连接"""
         while not ws.closed:
-            await asyncio.sleep(15)
+            await asyncio.sleep(30)
             if ws.closed:
                 break
             pong_received.clear()
@@ -664,12 +664,12 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 await ws.send_json({"type": "ping"})
             except Exception:
                 break
-            # 等待 8 秒内收到 pong
+            # 等待 30 秒内收到 pong（长任务场景需更宽容）
             try:
-                await asyncio.wait_for(pong_received.wait(), timeout=8)
+                await asyncio.wait_for(pong_received.wait(), timeout=30)
             except asyncio.TimeoutError:
                 # 心跳超时，关闭连接
-                print(f"[Tunnel] 隧道 {code} 心跳超时，断开连接")
+                print(f"[Tunnel] 隧道 {code} 心跳超时（30s），断开连接")
                 try:
                     await ws.close(code=4008, message=b"Heartbeat timeout")
                 except Exception:
@@ -908,12 +908,12 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
             "body": body_b64,
         })
 
-        # 等待响应（30 秒超时）
+        # 等待响应（600 秒超时，支持长任务如模型训练/下载）
         try:
-            resp_data = await asyncio.wait_for(future, timeout=30)
+            resp_data = await asyncio.wait_for(future, timeout=600)
         except asyncio.TimeoutError:
             return web.json_response(
-                {"error": "Gateway Timeout", "message": "隧道客户端响应超时"},
+                {"error": "Gateway Timeout", "message": "隧道客户端响应超时 (600s)"},
                 status=504,
             )
 

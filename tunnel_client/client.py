@@ -291,7 +291,7 @@ class TunnelClient:
         self._upnp_opened = False
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.1 (IPv6/IPv4 P2P + Relay)")
+        print(f"\n  Tunnel Client v2.2 (IPv6/IPv4 P2P + Relay + Stable)")
         print(f"  服务器:   {self.server}")
         print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:     {self.local_host}:{self.local_port}")
@@ -365,12 +365,17 @@ class TunnelClient:
             self._status_task = asyncio.create_task(self._status_loop(self._tunnel_code))
 
         elif t == "ping":
+            # 心跳响应：必须立即回复，不等待任何其他操作
             if self.ws and not self.ws.closed:
-                await self.ws.send_json({"type": "pong"})
+                try:
+                    await self.ws.send_json({"type": "pong"})
+                except Exception:
+                    pass
 
         elif t == "request":
-            # 中继模式才处理转发请求（P2P 模式下服务器不会发请求）
-            await self._proxy_request(data)
+            # 中继模式：用独立任务处理转发请求，不阻塞消息循环
+            # 这样心跳 pong 不会被长时间代理请求阻塞
+            asyncio.create_task(self._proxy_request_safe(data))
 
         elif t == "error":
             print(f"  [错误] {data.get('message', '未知错误')}")
@@ -502,6 +507,25 @@ class TunnelClient:
         self._upnp_opened = False
         self._p2p_mode = "relay"
 
+    async def _proxy_request_safe(self, data: dict):
+        """安全包装：捕获所有异常，防止后台任务崩溃"""
+        try:
+            await self._proxy_request(data)
+        except Exception as e:
+            print(f"  [代理错误] {e}")
+            # 尝试返回错误响应给服务端
+            try:
+                if self.ws and not self.ws.closed:
+                    await self.ws.send_json({
+                        "type": "response",
+                        "id": data.get("id", "unknown"),
+                        "status_code": 502,
+                        "headers": {"Content-Type": "application/json"},
+                        "body": base64.b64encode(json.dumps({"error": str(e)}).encode()).decode(),
+                    })
+            except Exception:
+                pass
+
     async def _proxy_request(self, data: dict):
         """中继模式：通过 WebSocket 转发 HTTP 请求"""
         req_id = data["id"]
@@ -518,7 +542,9 @@ class TunnelClient:
         target = f"http://{self.local_host}:{self.local_port}{url_path}"
 
         try:
-            async with self.session.request(method, target, headers=headers, data=body) as resp:
+            # 使用更长的超时（600秒），匹配服务端超时
+            timeout = aiohttp.ClientTimeout(total=600)
+            async with self.session.request(method, target, headers=headers, data=body, timeout=timeout) as resp:
                 resp_body = await resp.read()
                 resp_headers = {
                     k: v
@@ -557,7 +583,7 @@ class TunnelClient:
     async def _reconnect(self):
         if not self._running:
             return
-        delay = min(1 * (2 ** self.retry_count), 30)
+        delay = min(1 * (2 ** self.retry_count), 120)
         self.retry_count += 1
         print(f"  [重连] {delay}s 后...")
         await asyncio.sleep(delay)
@@ -575,7 +601,7 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.1 (IPv6/IPv4 P2P + Relay)",
+        description="Tunnel Client v2.2 (IPv6/IPv4 P2P + Relay + Stable)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
