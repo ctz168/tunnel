@@ -672,6 +672,63 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
         pending_requests.pop(req_id, None)
 
 
+# ======================== 全局错误中间件 ========================
+
+@web.middleware
+async def error_middleware(request: web.Request, handler):
+    """捕获所有未处理异常，返回友好错误信息并记录日志"""
+    try:
+        resp = await handler(request)
+        # aiohttp 有时会把状态码 >= 400 的响应标为不 send
+        return resp
+    except web.HTTPException as e:
+        logger.error(f"HTTP异常: {e.status} {request.method} {request.path} - {e.reason}")
+        return web.json_response(
+            {"error": e.reason, "status": e.status},
+            status=e.status,
+        )
+    except Exception as e:
+        logger.exception(f"未捕获异常: {request.method} {request.path}")
+        return web.Response(
+            text=f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>500 Server Error</title>
+<style>body{{font-family:monospace;background:#1a1a2e;color:#eee;padding:40px;max-width:800px;margin:0 auto}}
+h1{{color:#e74c3c}}pre{{background:#16213e;padding:16px;border-radius:8px;overflow:auto;font-size:13px;white-space:pre-wrap}}</style></head>
+<body><h1>500 Internal Server Error</h1>
+<p>Path: {request.method} {request.path}</p>
+<p>请查看 <code>data/server.log</code> 获取详细信息</p>
+<hr><pre>{traceback.format_exc()}</pre></body></html>""",
+            content_type="text/html; charset=utf-8",
+            status=500,
+        )
+
+
+# ======================== Debug 日志端点 ========================
+
+async def debug_logs_handler(request: web.Request) -> web.Response:
+    """GET /debug/logs — 读取服务器日志文件内容"""
+    try:
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, "r", encoding="utf-8") as f:
+                content = f.read()
+            # 只返回最后 5000 字符
+            if len(content) > 5000:
+                content = "... (截断，仅显示最近部分) ...\n\n" + content[-5000:]
+            return web.Response(
+                text=f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Server Logs</title>
+<style>body{{font-family:monospace;background:#0f172a;color:#e2e8f0;padding:20px}}
+pre{{background:#1e293b;padding:16px;border-radius:8px;overflow:auto;white-space:pre-wrap;font-size:13px;line-height:1.6}}</style></head>
+<body><h2>Server Logs ({LOG_FILE})</h2>
+<pre>{content}</pre></body></html>""",
+                content_type="text/html; charset=utf-8",
+            )
+        else:
+            return web.Response(text=f"日志文件不存在: {LOG_FILE}", status=404)
+    except Exception as e:
+        return web.Response(text=f"读取日志失败: {e}", status=500)
+
+
 # ======================== 应用工厂 ========================
 
 async def on_error_page(request: web.Request) -> web.Response:
@@ -687,7 +744,7 @@ async def on_error_page(request: web.Request) -> web.Response:
 
 def create_app() -> web.Application:
     """创建并配置 aiohttp 应用"""
-    app = web.Application()
+    app = web.Application(middlewares=[error_middleware])
     app["logger"] = logger
 
     # 注册生命周期钩子
@@ -705,6 +762,9 @@ def create_app() -> web.Application:
     app.router.add_delete("/api/tunnels/{tunnel_id}", delete_tunnel_handler)
     app.router.add_get("/api/tunnels/{tunnel_id}/logs", get_logs_handler)
     app.router.add_get("/api/tunnel-status", get_tunnel_status_handler)
+
+    # ---- Debug 端点 ----
+    app.router.add_get("/debug/logs", debug_logs_handler)
 
     # ---- WebSocket 隧道端点 ----
     app.router.add_get("/ws", websocket_handler)
