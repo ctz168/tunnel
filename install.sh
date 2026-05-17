@@ -3,21 +3,16 @@
 #  TunnelNet - 一键部署脚本
 #  绑定域名: aicq.online  端口: 7739
 #  用法: sudo bash install.sh
+#  说明: 在代码仓库目录下运行，直接在当前目录部署
 # ============================================================
 set -e
 
 DOMAIN="aicq.online"
 PORT="7739"
-REPO_URL="https://github.com/ctz168/tunnel.git"
 
-# 如果通过 sudo 运行，使用真实用户的 home 目录
-if [ -n "$SUDO_USER" ]; then
-  INSTALL_DIR="$(eval echo ~$SUDO_USER)/tunnelnet"
-  REAL_USER="$SUDO_USER"
-else
-  INSTALL_DIR="$HOME/tunnelnet"
-  REAL_USER="$(whoami)"
-fi
+# 安装目录 = install.sh 所在目录（即代码仓库根目录）
+INSTALL_DIR="$(cd "$(dirname "$0")" && pwd)"
+REAL_USER="${SUDO_USER:-$(whoami)}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 log_info()  { echo -e "${CYAN}  [INFO]${NC} $1"; }
@@ -71,18 +66,14 @@ elif [[ "$OS" == "macos" ]]; then
 fi
 log_ok "系统依赖安装完成"
 
-# ======================== 4. 克隆项目 ========================
-log_info "准备项目..."
-if [ -d "$INSTALL_DIR" ]; then
-  log_warn "目录已存在: $INSTALL_DIR，更新中..."
-  cd "$INSTALL_DIR" && git pull 2>/dev/null || true
-else
-  git clone "$REPO_URL" "$INSTALL_DIR"
-  cd "$INSTALL_DIR"
+# ======================== 4. 确认代码 ========================
+log_info "确认代码..."
+if [ ! -f "$INSTALL_DIR/server/server.py" ]; then
+  log_error "找不到 server/server.py，请在代码仓库根目录运行此脚本"
+  exit 1
 fi
-# 确保目录归属正确用户
 chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR" 2>/dev/null || true
-log_ok "项目目录: $INSTALL_DIR"
+log_ok "代码目录: $INSTALL_DIR"
 
 # ======================== 5. Python 虚拟环境 ========================
 log_info "创建 Python 虚拟环境..."
@@ -115,7 +106,6 @@ SERVICE_FILE="/etc/systemd/system/tunnelnet.service"
 HAS_SYSTEMD=false
 
 if [[ "$OS" == "linux" ]]; then
-  # 用全路径查找 systemctl
   if [ -x "/bin/systemctl" ] || [ -x "/usr/bin/systemctl" ] || [ -x "/usr/sbin/systemctl" ]; then
     HAS_SYSTEMD=true
   elif command -v systemctl &>/dev/null; then
@@ -176,7 +166,6 @@ if [ "$HAS_SYSTEMD" = true ]; then
     log_warn "systemd 启动失败，请手动检查: journalctl -u tunnelnet -n 20"
   fi
 else
-  # nohup 后台启动
   cd "$INSTALL_DIR/server"
   source venv/bin/activate
   nohup python3 server.py > /tmp/tunnelnet.log 2>&1 &
