@@ -2,14 +2,22 @@
 # ============================================================
 #  TunnelNet - 一键部署脚本
 #  绑定域名: aicq.online  端口: 7739
-#  用法: bash install.sh
+#  用法: sudo bash install.sh
 # ============================================================
 set -e
 
 DOMAIN="aicq.online"
 PORT="7739"
-INSTALL_DIR="$HOME/tunnelnet"
 REPO_URL="https://github.com/ctz168/tunnel.git"
+
+# 如果通过 sudo 运行，使用真实用户的 home 目录
+if [ -n "$SUDO_USER" ]; then
+  INSTALL_DIR="$(eval echo ~$SUDO_USER)/tunnelnet"
+  REAL_USER="$SUDO_USER"
+else
+  INSTALL_DIR="$HOME/tunnelnet"
+  REAL_USER="$(whoami)"
+fi
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 log_info()  { echo -e "${CYAN}  [INFO]${NC} $1"; }
@@ -37,6 +45,8 @@ if [[ "$OSTYPE" == "linux-gnu"* ]]; then
 elif [[ "$OSTYPE" == "darwin"* ]]; then OS="macos"
 else OS="unknown"; fi
 log_ok "系统: $OS"
+log_info "安装用户: $REAL_USER"
+log_info "安装目录: $INSTALL_DIR"
 
 # ======================== 2. 端口检查 ========================
 log_info "检查端口 ${PORT}..."
@@ -48,11 +58,11 @@ log_ok "端口 ${PORT} 可用"
 # ======================== 3. 安装系统依赖 ========================
 log_info "安装系统依赖..."
 if [[ "$OS" == "debian" ]]; then
-  sudo apt-get update -qq && sudo apt-get install -y -qq python3 python3-pip python3-venv git 2>/dev/null
+  apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv git 2>/dev/null || true
 elif [[ "$OS" == "redhat" ]]; then
-  sudo yum install -y -q python3 python3-pip git 2>/dev/null
+  yum install -y -q python3 python3-pip git 2>/dev/null || true
 elif [[ "$OS" == "alpine" ]]; then
-  sudo apk add --no-progress python3 py3-pip git 2>/dev/null
+  apk add --no-progress python3 py3-pip git 2>/dev/null || true
 elif [[ "$OS" == "macos" ]]; then
   if ! command -v python3 &>/dev/null; then
     log_error "请先安装 Python 3: brew install python3"
@@ -70,6 +80,8 @@ else
   git clone "$REPO_URL" "$INSTALL_DIR"
   cd "$INSTALL_DIR"
 fi
+# 确保目录归属正确用户
+chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR" 2>/dev/null || true
 log_ok "项目目录: $INSTALL_DIR"
 
 # ======================== 5. Python 虚拟环境 ========================
@@ -89,6 +101,7 @@ log_ok "Python 依赖安装完成"
 # ======================== 7. 初始化数据库 ========================
 log_info "初始化数据库..."
 mkdir -p "$INSTALL_DIR/data"
+chown -R "$REAL_USER:$REAL_USER" "$INSTALL_DIR/data" 2>/dev/null || true
 DB_PATH="$INSTALL_DIR/data/tunnel.db" python3 -c "
 import asyncio, sys
 sys.path.insert(0, '.')
@@ -98,44 +111,79 @@ print('  数据库初始化完成')
 " 2>&1 || log_warn "数据库将在首次启动时自动初始化"
 
 # ======================== 8. systemd 服务 ========================
-log_info "配置 systemd 服务..."
 SERVICE_FILE="/etc/systemd/system/tunnelnet.service"
+HAS_SYSTEMD=false
 
-if [[ "$OS" == "linux" ]] && command -v systemctl &>/dev/null && [ -w "/etc/systemd/system" ] 2>/dev/null; then
-  sudo tee "$SERVICE_FILE" > /dev/null << EOF
+if [[ "$OS" == "linux" ]]; then
+  # 用全路径查找 systemctl
+  if [ -x "/bin/systemctl" ] || [ -x "/usr/bin/systemctl" ] || [ -x "/usr/sbin/systemctl" ]; then
+    HAS_SYSTEMD=true
+  elif command -v systemctl &>/dev/null; then
+    HAS_SYSTEMD=true
+  fi
+fi
+
+if [ "$HAS_SYSTEMD" = true ]; then
+  log_info "配置 systemd 服务..."
+  cat > "$SERVICE_FILE" << EOF
 [Unit]
 Description=TunnelNet Tunnel Server (${DOMAIN}:${PORT})
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=$(whoami)
+User=${REAL_USER}
+Group=${REAL_USER}
 WorkingDirectory=${INSTALL_DIR}/server
 Environment=DB_PATH=${INSTALL_DIR}/data/tunnel.db
 Environment=SERVER_PORT=${PORT}
 ExecStart=${INSTALL_DIR}/server/venv/bin/python3 server.py
 Restart=always
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 EOF
-
-  sudo systemctl daemon-reload
-  sudo systemctl enable tunnelnet 2>/dev/null || true
+  chmod 644 "$SERVICE_FILE"
+  systemctl daemon-reload
+  systemctl enable tunnelnet 2>/dev/null || true
   log_ok "systemd 服务已配置"
 else
-  log_warn "systemd 不可用，将使用手动启动"
+  log_warn "systemd 不可用，将使用 nohup 后台启动"
 fi
 
 # ======================== 9. 防火墙 ========================
 log_info "配置防火墙..."
 if command -v ufw &>/dev/null; then
-  sudo ufw allow ${PORT}/tcp 2>/dev/null && log_ok "ufw: 端口 ${PORT} 已开放"
+  ufw allow ${PORT}/tcp 2>/dev/null && log_ok "ufw: 端口 ${PORT} 已开放" || true
 fi
 if command -v firewall-cmd &>/dev/null; then
-  sudo firewall-cmd --permanent --add-port=${PORT}/tcp 2>/dev/null && sudo firewall-cmd --reload 2>/dev/null
-  log_ok "firewalld: 端口 ${PORT} 已开放"
+  firewall-cmd --permanent --add-port=${PORT}/tcp 2>/dev/null && firewall-cmd --reload 2>/dev/null
+  log_ok "firewalld: 端口 ${PORT} 已开放" || true
+fi
+
+# ======================== 10. 启动服务 ========================
+log_info "启动服务..."
+if [ "$HAS_SYSTEMD" = true ]; then
+  systemctl start tunnelnet
+  sleep 1
+  if systemctl is-active --quiet tunnelnet; then
+    log_ok "TunnelNet 服务已启动"
+  else
+    log_warn "systemd 启动失败，请手动检查: journalctl -u tunnelnet -n 20"
+  fi
+else
+  # nohup 后台启动
+  cd "$INSTALL_DIR/server"
+  source venv/bin/activate
+  nohup python3 server.py > /tmp/tunnelnet.log 2>&1 &
+  TUNNEL_PID=$!
+  echo "$TUNNEL_PID" > /tmp/tunnelnet.pid
+  log_ok "TunnelNet 已后台启动 (PID: $TUNNEL_PID)"
+  log_info "日志: tail -f /tmp/tunnelnet.log"
 fi
 
 # ======================== 完成 ========================
@@ -149,16 +197,18 @@ echo ""
 echo -e "  ${GREEN}公网地址:${NC}   http://${DOMAIN}:${PORT}"
 echo -e "  ${GREEN}管理面板:${NC}   http://${DOMAIN}:${PORT}"
 echo ""
-echo "  ──── 启动服务 ────"
+echo "  ──── 管理命令 ────"
 echo ""
-if command -v systemctl &>/dev/null; then
+if [ "$HAS_SYSTEMD" = true ]; then
   echo "  systemctl start tunnelnet    # 启动"
+  echo "  systemctl stop tunnelnet     # 停止"
+  echo "  systemctl restart tunnelnet  # 重启"
   echo "  systemctl status tunnelnet   # 状态"
   echo "  journalctl -u tunnelnet -f   # 日志"
-  echo "  systemctl stop tunnelnet     # 停止"
   echo ""
 else
-  echo "  cd ${INSTALL_DIR}/server && source venv/bin/activate && python3 server.py"
+  echo "  停止: kill \$(cat /tmp/tunnelnet.pid)"
+  echo "  日志: tail -f /tmp/tunnelnet.log"
   echo ""
 fi
 echo "  ──── 客户端使用 ────"
