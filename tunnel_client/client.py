@@ -15,6 +15,8 @@ P2P 策略 (优先级):
   或从源码:
   python -m tunnel_client --key <认证令牌> --port 8080
 """
+from __future__ import annotations
+
 import argparse
 import asyncio
 import base64

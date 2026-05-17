@@ -1,11 +1,15 @@
 """
 Tunnel - 数据库操作层 (SQLite + aiosqlite)
 """
+from __future__ import annotations
+
 import os
 import uuid
 import secrets
 import string
 from datetime import datetime
+
+from __future__ import annotations
 
 import aiosqlite
 

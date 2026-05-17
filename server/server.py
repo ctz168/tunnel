@@ -2,6 +2,8 @@
 Tunnel Server - 基于 aiohttp 的内网穿透服务端
 类似 ngrok，用户可通过固定域名 (默认 aicq.online:7739) 将本地服务暴露到公网
 """
+from __future__ import annotations
+
 import os
 import re
 import sys
