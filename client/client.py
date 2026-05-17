@@ -155,7 +155,7 @@ class TunnelClient:
 def main():
     parser = argparse.ArgumentParser(description="Tunnel Client v1.0")
     parser.add_argument("-k", "--key", required=True, help="认证令牌（Dashboard 创建时生成）")
-    parser.add_argument("-p", "--port", type=int, required=True, help="本地服务端口")
+    parser.add_argument("-p", "--port", type=int, default=8080, help="本地服务端口 (默认: 8080)")
     parser.add_argument("-s", "--server", default="aicq.online:7739", help="服务器地址 (默认: aicq.online:7739)")
     parser.add_argument("--host", default="localhost", help="本地服务地址 (默认: localhost)")
     args = parser.parse_args()

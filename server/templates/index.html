@@ -97,6 +97,14 @@
   .domain-edit-row{display:flex;align-items:center;gap:8px}
   .domain-edit-row input{padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;font-family:"SF Mono",Consolas,monospace;width:220px;outline:none}
   .domain-edit-row input:focus{border-color:var(--accent)}
+  /* ── Auth pages ── */
+  .auth-container{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px}
+  .auth-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:40px;max-width:420px;width:100%;box-shadow:var(--shadow)}
+  .auth-card h2{font-size:22px;margin-bottom:6px;display:flex;align-items:center;gap:10px}
+  .auth-card .subtitle{color:var(--text-muted);margin-bottom:24px;font-size:14px}
+  .auth-card .form-group{margin-bottom:18px}
+  .auth-card .form-actions{justify-content:stretch;padding:0}
+  .auth-card .form-actions .btn{flex:1;justify-content:center}
   /* ── Responsive ── */
   @media(max-width:768px){
     .header{padding:14px 16px}
@@ -105,9 +113,6 @@
     .modal{max-width:95vw}
     .domain-edit-row input{width:160px}
   }
-  /* ── Copy tooltip ── */
-  .copy-tip{font-size:11px;color:var(--success);animation:fadeOut .6s .4s forwards}
-  @keyframes fadeOut{to{opacity:0}}
   /* scrollbar */
   ::-webkit-scrollbar{width:6px;height:6px}
   ::-webkit-scrollbar-track{background:transparent}
@@ -116,6 +121,44 @@
 </style>
 </head>
 <body>
+
+<!-- ============ AUTH: Setup Password ============ -->
+<div class="auth-container" id="authSetup" style="display:none">
+  <div class="auth-card">
+    <h2>&#x1F512; 设置管理密码</h2>
+    <p class="subtitle">首次使用，请设置管理面板的登录密码</p>
+    <div class="form-group">
+      <label>密码（至少 4 位）</label>
+      <input type="password" id="setupPwd" placeholder="输入密码" autocomplete="new-password">
+    </div>
+    <div class="form-group">
+      <label>确认密码</label>
+      <input type="password" id="setupPwd2" placeholder="再次输入密码" autocomplete="new-password">
+    </div>
+    <div class="form-actions" style="padding:0">
+      <button class="btn btn-primary" id="setupBtn" onclick="doSetup()">确认设置</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ AUTH: Login ============ -->
+<div class="auth-container" id="authLogin" style="display:none">
+  <div class="auth-card">
+    <h2>&#x1F510; 登录管理面板</h2>
+    <p class="subtitle">请输入管理密码</p>
+    <div class="form-group">
+      <label>密码</label>
+      <input type="password" id="loginPwd" placeholder="输入密码" autocomplete="current-password"
+             onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="form-actions" style="padding:0">
+      <button class="btn btn-primary" onclick="doLogin()">登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MAIN APP ============ -->
+<div id="mainApp" style="display:none">
 
 <!-- Toast Container -->
 <div class="toast-container" id="toastContainer"></div>
@@ -131,6 +174,7 @@
         <button class="btn btn-ghost btn-icon" onclick="showDomainEdit()" title="编辑域名">&#x270F;&#xFE0F;</button>
       </div>
     </div>
+    <button class="btn btn-ghost btn-sm" onclick="doLogout()">&#x1F6AA; 退出</button>
   </div>
 </header>
 
@@ -168,6 +212,8 @@
   </div>
 </main>
 
+</div><!-- end mainApp -->
+
 <!-- Create Tunnel Modal -->
 <div class="modal-overlay" id="createModal">
   <div class="modal">
@@ -182,7 +228,7 @@
       </div>
       <div class="form-group">
         <label>本地端口 *</label>
-        <input type="number" id="cPort" placeholder="例如: 8080" min="1" max="65535">
+        <input type="number" id="cPort" placeholder="8080" value="8080" min="1" max="65535">
       </div>
       <div class="form-group">
         <label>本地地址</label>
@@ -197,6 +243,20 @@
     <div class="form-actions" id="createActions">
       <button class="btn btn-ghost" onclick="closeCreateModal()">取消</button>
       <button class="btn btn-primary" id="createSubmitBtn" onclick="createTunnel()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- View Token Modal -->
+<div class="modal-overlay" id="tokenModal">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <h3>&#x1F511; 隧道密钥</h3>
+      <button class="modal-close" onclick="closeTokenModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="tokenContent"></div>
+    <div class="form-actions">
+      <button class="btn btn-ghost" onclick="closeTokenModal()">关闭</button>
     </div>
   </div>
 </div>
@@ -238,7 +298,108 @@
 /* ── Globals ── */
 const DOMAIN = "{{ domain }}";
 let tunnels = [];
-let statusMap = {}; // tunnel_id -> status info
+let statusMap = {};
+let isLoggedIn = false;
+let authChecked = false;
+
+/* ── Auth ── */
+function checkAuth() {
+  fetch('/api/auth/check')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.setup_done) {
+        if (data.logged_in) {
+          showApp();
+        } else {
+          showLogin();
+        }
+      } else {
+        showSetup();
+      }
+    })
+    .catch(function() {
+      showLogin();
+    });
+}
+
+function showSetup() {
+  document.getElementById('authSetup').style.display = 'flex';
+  document.getElementById('authLogin').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'none';
+  setTimeout(function() { document.getElementById('setupPwd').focus(); }, 100);
+}
+
+function showLogin() {
+  document.getElementById('authSetup').style.display = 'none';
+  document.getElementById('authLogin').style.display = 'flex';
+  document.getElementById('mainApp').style.display = 'none';
+  setTimeout(function() { document.getElementById('loginPwd').focus(); }, 100);
+}
+
+function showApp() {
+  isLoggedIn = true;
+  document.getElementById('authSetup').style.display = 'none';
+  document.getElementById('authLogin').style.display = 'none';
+  document.getElementById('mainApp').style.display = '';
+  fetchTunnels();
+  fetchTunnelStatus();
+  setInterval(fetchTunnels, 5000);
+  setInterval(fetchTunnelStatus, 5000);
+}
+
+function doSetup() {
+  var pwd = document.getElementById('setupPwd').value;
+  var pwd2 = document.getElementById('setupPwd2').value;
+  if (pwd.length < 4) { showToast('密码长度至少 4 位', 'error'); return; }
+  if (pwd !== pwd2) { showToast('两次输入的密码不一致', 'error'); return; }
+  document.getElementById('setupBtn').disabled = true;
+  fetch('/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pwd })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    document.getElementById('setupBtn').disabled = false;
+    if (data.error) { showToast(data.error, 'error'); return; }
+    showToast('密码设置成功', 'success');
+    showApp();
+  })
+  .catch(function() {
+    document.getElementById('setupBtn').disabled = false;
+    showToast('请求失败', 'error');
+  });
+}
+
+function doLogin() {
+  var pwd = document.getElementById('loginPwd').value;
+  if (!pwd) { showToast('请输入密码', 'error'); return; }
+  fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pwd })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) { showToast(data.error, 'error'); return; }
+    showToast('登录成功', 'success');
+    showApp();
+  })
+  .catch(function() {
+    showToast('请求失败', 'error');
+  });
+}
+
+function doLogout() {
+  fetch('/api/auth/logout', { method: 'POST' })
+    .then(function() {
+      isLoggedIn = false;
+      tunnels = [];
+      statusMap = {};
+      showLogin();
+      showToast('已退出登录', 'info');
+    });
+}
 
 /* ── Helpers ── */
 function formatBytes(bytes) {
@@ -264,6 +425,7 @@ function timestampStr() {
 function showToast(msg, type) {
   type = type || 'info';
   const container = document.getElementById('toastContainer');
+  if (!container) return;
   const t = document.createElement('div');
   t.className = 'toast toast-' + type;
   t.textContent = msg;
@@ -272,11 +434,10 @@ function showToast(msg, type) {
 }
 
 /* ── Clipboard ── */
-function copyText(text, el) {
+function copyText(text) {
   navigator.clipboard.writeText(text).then(function() {
-    showToast('已复制: ' + text, 'success');
+    showToast('已复制: ' + text.substring(0, 20) + (text.length > 20 ? '...' : ''), 'success');
   }).catch(function() {
-    /* Fallback */
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.cssText = 'position:fixed;left:-9999px';
@@ -284,7 +445,7 @@ function copyText(text, el) {
     ta.select();
     document.execCommand('copy');
     document.body.removeChild(ta);
-    showToast('已复制: ' + text, 'success');
+    showToast('已复制', 'success');
   });
 }
 
@@ -320,7 +481,7 @@ function saveDomain() {
   .then(function(r) { return r.json(); })
   .then(function(data) {
     if (data.error) { showToast(data.error || '保存失败', 'error'); return; }
-    showToast('域名已更新', 'success');
+    showToast('域名已更新，刷新页面生效', 'success');
     setTimeout(function() { location.reload(); }, 800);
   })
   .catch(function() { showToast('请求失败', 'error'); });
@@ -329,6 +490,7 @@ function saveDomain() {
 /* ── Render Tunnels ── */
 function renderTunnels() {
   var tbody = document.getElementById('tunnelBody');
+  if (!tbody) return;
   var empty = document.getElementById('emptyState');
 
   if (!tunnels || tunnels.length === 0) {
@@ -369,6 +531,7 @@ function renderTunnels() {
         '<button class="btn btn-ghost btn-icon btn-sm" onclick="copyText(\'' + escapeHtml(pubUrl).replace(/'/g, "\\'") + '\')" title="复制">&#x1F4CB;</button>' +
       '</div></td>' +
       '<td><div class="actions-cell">' +
+        '<button class="btn btn-ghost btn-sm" onclick="viewToken(\'' + sid + '\',\'' + escapeHtml(t.name || t.code || sid) + '\')">&#x1F511; 密钥</button>' +
         '<button class="btn btn-ghost btn-sm" onclick="openLogModal(\'' + sid + '\',\'' + escapeHtml(t.name || t.code || sid) + '\')">&#x1F4CB; 日志</button>' +
         '<button class="btn btn-danger btn-sm" onclick="confirmDelete(\'' + sid + '\',\'' + escapeHtml(t.name || t.code || sid) + '\')">&#x1F5D1;&#xFE0F;</button>' +
       '</div></td>' +
@@ -379,6 +542,7 @@ function renderTunnels() {
 
 /* ── Fetch Tunnels ── */
 function fetchTunnels() {
+  if (!isLoggedIn) return;
   fetch('/api/tunnels')
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -390,17 +554,44 @@ function fetchTunnels() {
 
 /* ── Fetch Tunnel Status ── */
 function fetchTunnelStatus() {
+  if (!isLoggedIn) return;
   fetch('/api/tunnel-status')
     .then(function(r) { return r.json(); })
     .then(function(data) {
       statusMap = {};
       if (data && data.tunnels && typeof data.tunnels === 'object') {
-        /* data.tunnels = { "CODE1": {online, bytes_in, ...}, ... } */
         statusMap = data.tunnels;
       }
       renderTunnels();
     })
     .catch(function() {});
+}
+
+/* ── View Token ── */
+function viewToken(id, name) {
+  document.getElementById('tokenModal').classList.add('active');
+  document.getElementById('tokenContent').innerHTML = '<div class="log-empty">加载中...</div>';
+  fetch('/api/tunnels/' + id + '/token')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var token = data.auth_token || '';
+      document.getElementById('tokenContent').innerHTML =
+        '<p style="margin-bottom:8px;color:var(--text-muted)">隧道: <strong>' + escapeHtml(name) + '</strong></p>' +
+        '<div class="token-box">' +
+          '<div class="token-label">&#x1F512; 认证令牌</div>' +
+          '<div class="token-value"><code id="viewTokenCode">' + escapeHtml(token) + '</code>' +
+            '<button class="btn btn-primary btn-sm" onclick="copyText(document.getElementById(\'viewTokenCode\').textContent)">&#x1F4CB; 复制</button>' +
+          '</div>' +
+          '<div class="warning">&#x26A0;&#xFE0F; 请妥善保管此令牌，用于客户端连接</div>' +
+        '</div>';
+    })
+    .catch(function() {
+      document.getElementById('tokenContent').innerHTML = '<div class="log-empty">加载失败</div>';
+    });
+}
+
+function closeTokenModal() {
+  document.getElementById('tokenModal').classList.remove('active');
 }
 
 /* ── Create Tunnel ── */
@@ -410,7 +601,7 @@ function openCreateModal() {
   document.getElementById('createResultArea').style.display = 'none';
   document.getElementById('createSubmitBtn').style.display = '';
   document.getElementById('cName').value = '';
-  document.getElementById('cPort').value = '';
+  document.getElementById('cPort').value = '8080';
   document.getElementById('cHost').value = 'localhost';
   document.getElementById('cDesc').value = '';
   document.getElementById('cName').focus();
@@ -445,12 +636,11 @@ function createTunnel() {
     if (data.error) { showToast(data.error || '创建失败', 'error'); return; }
     showToast('隧道创建成功', 'success');
     fetchTunnels();
-    /* Show token result */
     var tunnel = data.tunnel || data;
+    var token = tunnel.auth_token || tunnel.token || '';
     document.getElementById('createFormArea').style.display = 'none';
     btn.style.display = 'none';
     var resultArea = document.getElementById('createResultArea');
-    var token = tunnel.auth_token || tunnel.token || '';
     resultArea.style.display = '';
     resultArea.innerHTML =
       '<div class="token-box">' +
@@ -458,7 +648,7 @@ function createTunnel() {
         '<div class="token-value"><code id="tokenCode">' + escapeHtml(token) + '</code>' +
           '<button class="btn btn-primary btn-sm" onclick="copyText(document.getElementById(\'tokenCode\').textContent)">&#x1F4CB; 复制</button>' +
         '</div>' +
-        '<div class="warning">&#x26A0;&#xFE0F; 请保存此认证令牌，关闭后将无法再次查看</div>' +
+        '<div class="warning">&#x26A0;&#xFE0F; 请保存此认证令牌，关闭后将无法再次查看（可在列表中点击"密钥"查看）</div>' +
       '</div>';
   })
   .catch(function() {
@@ -556,11 +746,8 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-/* ── Init ── */
-fetchTunnels();
-fetchTunnelStatus();
-setInterval(fetchTunnels, 5000);
-setInterval(fetchTunnelStatus, 5000);
+/* ── Init: check auth first ── */
+checkAuth();
 </script>
 </body>
 </html>

@@ -6,6 +6,8 @@ import os
 import re
 import sys
 import json
+import time
+import secrets
 import asyncio
 import base64
 import uuid
@@ -25,6 +27,11 @@ DB_PATH = os.environ.get("DB_PATH", "data/tunnel.db")
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "7739"))
 LOG_DIR = os.environ.get("LOG_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
 LOG_FILE = os.path.join(LOG_DIR, "server.log")
+PWD_FILE = os.path.join(os.path.dirname(__file__), "pwd.txt")
+
+# 管理会话：token -> {"created_at": ...}
+_admin_sessions: dict[str, dict] = {}
+SESSION_MAX_AGE = 86400 * 7  # 7 天
 
 # ======================== 日志配置 ========================
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -252,6 +259,108 @@ async def index_handler(request: web.Request) -> web.Response:
         return web.Response(text=html, content_type="text/html", charset="utf-8")
 
 
+# ======================== 认证 API ========================
+
+def _is_setup_done() -> bool:
+    """检查是否已设置管理密码"""
+    return os.path.exists(PWD_FILE)
+
+
+def _read_password() -> str:
+    """读取密码文件（明文）"""
+    if os.path.exists(PWD_FILE):
+        with open(PWD_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return ""
+
+
+def _check_session(request: web.Request) -> bool:
+    """检查请求中是否携带有效的管理员 session"""
+    token = request.cookies.get("tunnel_admin") or request.headers.get("X-Admin-Token", "")
+    if not token:
+        return False
+    session = _admin_sessions.get(token)
+    if not session:
+        return False
+    # 检查是否过期
+    if time.time() - session["created_at"] > SESSION_MAX_AGE:
+        _admin_sessions.pop(token, None)
+        return False
+    return True
+
+
+def _gen_session_token() -> str:
+    """生成随机的 session token"""
+    return secrets.token_hex(32)
+
+
+async def auth_check_handler(request: web.Request) -> web.Response:
+    """GET /api/auth/check — 检查是否已设置密码 + 是否已登录"""
+    return web.json_response({
+        "setup_done": _is_setup_done(),
+        "logged_in": _check_session(request),
+    })
+
+
+async def auth_setup_handler(request: web.Request) -> web.Response:
+    """POST /api/auth/setup — 首次设置密码"""
+    if _is_setup_done():
+        return web.json_response({"error": "密码已设置，无法重复设置"}, status=400)
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "无效请求"}, status=400)
+
+    password = body.get("password", "")
+    if len(password) < 4:
+        return web.json_response({"error": "密码长度至少 4 位"}, status=400)
+
+    # 明文写入 pwd.txt
+    with open(PWD_FILE, "w", encoding="utf-8") as f:
+        f.write(password)
+
+    # 自动登录
+    token = _gen_session_token()
+    _admin_sessions[token] = {"created_at": time.time()}
+    logger.info("管理员密码已设置")
+
+    resp = web.json_response({"success": True})
+    resp.set_cookie("tunnel_admin", token, max_age=SESSION_MAX_AGE, httponly=True)
+    return resp
+
+
+async def auth_login_handler(request: web.Request) -> web.Response:
+    """POST /api/auth/login — 登录"""
+    if not _is_setup_done():
+        return web.json_response({"error": "请先设置密码"}, status=400)
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "无效请求"}, status=400)
+
+    password = body.get("password", "")
+    stored = _read_password()
+    if password != stored:
+        return web.json_response({"error": "密码错误"}, status=401)
+
+    token = _gen_session_token()
+    _admin_sessions[token] = {"created_at": time.time()}
+    logger.info("管理员登录成功")
+
+    resp = web.json_response({"success": True})
+    resp.set_cookie("tunnel_admin", token, max_age=SESSION_MAX_AGE, httponly=True)
+    return resp
+
+
+async def auth_logout_handler(request: web.Request) -> web.Response:
+    """POST /api/auth/logout — 登出"""
+    token = request.cookies.get("tunnel_admin", "")
+    _admin_sessions.pop(token, None)
+    resp = web.json_response({"success": True})
+    resp.del_cookie("tunnel_admin")
+    return resp
+
+
 # ======================== JSON API 路由 ========================
 
 async def get_config_handler(request: web.Request) -> web.Response:
@@ -281,16 +390,30 @@ async def update_config_handler(request: web.Request) -> web.Response:
 
 
 async def list_tunnels_handler(request: web.Request) -> web.Response:
-    """GET /api/tunnels — 列出所有隧道（脱敏 auth_token）"""
+    """GET /api/tunnels — 列出所有隧道（脱敏 auth_token，管理端返回完整 token）"""
+    is_admin = _check_session(request)
     tunnels = await tunnel_db.list_tunnels(_get_db())
-    # 安全处理：隐藏完整 auth_token，仅返回前 8 位前缀
     safe_list = []
     for t in tunnels:
         safe = dict(t)
-        safe["token_prefix"] = t["auth_token"][:8]
+        if is_admin:
+            safe["token_prefix"] = t["auth_token"][:8]
+            # 管理员可以看到完整 token
+        else:
+            safe["token_prefix"] = t["auth_token"][:8]
         del safe["auth_token"]
         safe_list.append(safe)
     return web.json_response({"tunnels": safe_list})
+
+
+async def get_tunnel_token_handler(request: web.Request) -> web.Response:
+    """GET /api/tunnels/{tunnel_id}/token — 获取隧道完整认证令牌（需登录）"""
+    tunnel_id = request.match_info["tunnel_id"]
+    tunnels = await tunnel_db.list_tunnels(_get_db())
+    target = next((t for t in tunnels if t["id"] == tunnel_id), None)
+    if not target:
+        return web.json_response({"error": "隧道不存在"}, status=404)
+    return web.json_response({"auth_token": target["auth_token"]})
 
 
 async def create_tunnel_handler(request: web.Request) -> web.Response:
@@ -761,7 +884,14 @@ def create_app() -> web.Application:
     app.router.add_post("/api/tunnels", create_tunnel_handler)
     app.router.add_delete("/api/tunnels/{tunnel_id}", delete_tunnel_handler)
     app.router.add_get("/api/tunnels/{tunnel_id}/logs", get_logs_handler)
+    app.router.add_get("/api/tunnels/{tunnel_id}/token", get_tunnel_token_handler)
     app.router.add_get("/api/tunnel-status", get_tunnel_status_handler)
+
+    # ---- 认证路由 ----
+    app.router.add_get("/api/auth/check", auth_check_handler)
+    app.router.add_post("/api/auth/setup", auth_setup_handler)
+    app.router.add_post("/api/auth/login", auth_login_handler)
+    app.router.add_post("/api/auth/logout", auth_logout_handler)
 
     # ---- Debug 端点 ----
     app.router.add_get("/debug/logs", debug_logs_handler)
