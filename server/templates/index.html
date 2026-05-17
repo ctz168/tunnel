@@ -7,117 +7,265 @@
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   :root{
-    --bg:#0f172a;--card:#1e293b;--border:#334155;
-    --text:#e2e8f0;--text-muted:#94a3b8;--accent:#3b82f6;
-    --accent-hover:#2563eb;--danger:#ef4444;--danger-hover:#dc2626;
-    --success:#22c55e;--warning:#f59e0b;
-    --radius:8px;--shadow:0 4px 24px rgba(0,0,0,.3);
+    /* Claude Code warm light palette */
+    --bg: #FDF6E3;
+    --bg-secondary: #F5EDDA;
+    --card: #FFFFFF;
+    --card-hover: #FFFCF5;
+    --border: #E8DFC8;
+    --border-light: #F0E8D8;
+    --text: #3C3836;
+    --text-secondary: #665C54;
+    --text-muted: #9C9488;
+    --accent: #C0792A;
+    --accent-hover: #A8661E;
+    --accent-light: #FDF0E0;
+    --accent-subtle: #FBF2E5;
+    --danger: #C4382F;
+    --danger-hover: #A82D26;
+    --danger-light: #FDF0EF;
+    --success: #5A8A3C;
+    --success-light: #F0F7EB;
+    --warning: #B8860B;
+    --warning-light: #FDF6E0;
+    --info: #4A7C9B;
+    --info-light: #EEF5FA;
+    --radius: 10px;
+    --radius-lg: 14px;
+    --shadow-sm: 0 1px 3px rgba(60,56,54,.06), 0 1px 2px rgba(60,56,54,.04);
+    --shadow: 0 2px 12px rgba(60,56,54,.07), 0 1px 4px rgba(60,56,54,.04);
+    --shadow-lg: 0 8px 30px rgba(60,56,54,.1), 0 2px 8px rgba(60,56,54,.05);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", "PingFang SC", sans-serif;
+    --font-mono: "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", Menlo, "Courier New", monospace;
+    --transition: 0.18s ease;
   }
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans SC",sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}
+  body{font-family:var(--font-sans);background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
   a{color:var(--accent);text-decoration:none}
+  ::selection{background:var(--accent);color:#fff}
+
   /* ── Header ── */
-  .header{background:var(--card);border-bottom:1px solid var(--border);padding:16px 28px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;position:sticky;top:0;z-index:50}
-  .header-title{font-size:22px;font-weight:700;letter-spacing:-.5px;display:flex;align-items:center;gap:10px}
-  .header-title span.emoji{font-size:26px}
-  .header-right{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-  .domain-display{display:flex;align-items:center;gap:8px;background:#0f172a;padding:6px 14px;border-radius:var(--radius);font-size:14px;font-family:"SF Mono",Consolas,"Liberation Mono",Menlo,monospace}
-  .domain-display .label{color:var(--text-muted);font-family:inherit}
-  .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:none;border-radius:var(--radius);cursor:pointer;font-size:14px;font-weight:500;transition:background .15s,transform .1s;line-height:1.4}
+  .header{
+    background: linear-gradient(135deg, #FBF2E5 0%, #FDF6E3 50%, #F8EDDA 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: blur(8px);
+  }
+  .header::after{
+    content:'';position:absolute;bottom:0;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.3;
+  }
+  .header-title{font-size:20px;font-weight:700;letter-spacing:-.3px;display:flex;align-items:center;gap:8px;color:var(--text)}
+  .header-title .icon{width:28px;height:28px;border-radius:7px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0}
+  .header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .domain-display{display:flex;align-items:center;gap:8px;background:var(--card);padding:6px 12px;border-radius:var(--radius);font-size:13px;border:1px solid var(--border);box-shadow:var(--shadow-sm)}
+  .domain-display .label{color:var(--text-muted);font-family:var(--font-sans)}
+  .domain-display span:last-of-type{font-family:var(--font-mono);color:var(--text-secondary);font-size:13px}
+
+  /* ── Buttons ── */
+  .btn{display:inline-flex;align-items:center;gap:5px;padding:8px 16px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;transition:all var(--transition);line-height:1.4;white-space:nowrap;font-family:var(--font-sans)}
   .btn:active{transform:scale(.97)}
-  .btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-hover)}
-  .btn-ghost{background:transparent;color:var(--text-muted);border:1px solid var(--border)}.btn-ghost:hover{background:var(--border);color:var(--text)}
-  .btn-danger{background:var(--danger);color:#fff}.btn-danger:hover{background:var(--danger-hover)}
-  .btn-sm{padding:5px 10px;font-size:13px}
-  .btn-icon{padding:6px 8px;font-size:15px;line-height:1}
+  .btn-primary{background:var(--accent);color:#fff;box-shadow:0 1px 4px rgba(192,121,42,.2)}.btn-primary:hover{background:var(--accent-hover);box-shadow:0 2px 8px rgba(192,121,42,.3)}
+  .btn-ghost{background:var(--card);color:var(--text-secondary);border:1px solid var(--border)}.btn-ghost:hover{background:var(--bg-secondary);border-color:var(--text-muted);color:var(--text)}
+  .btn-danger{background:var(--danger);color:#fff;box-shadow:0 1px 4px rgba(196,56,47,.15)}.btn-danger:hover{background:var(--danger-hover)}
+  .btn-sm{padding:5px 10px;font-size:12px;border-radius:6px}
+  .btn-icon{padding:6px 8px;font-size:14px;line-height:1}
+
   /* ── Main ── */
-  .main{max-width:1200px;margin:0 auto;padding:24px 28px 60px}
-  .toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px}
-  .toolbar h2{font-size:18px;font-weight:600}
-  /* ── Table ── */
-  .card{background:var(--card);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden}
-  .table-wrap{overflow-x:auto}
-  table{width:100%;border-collapse:collapse;font-size:14px}
-  thead{background:#162032}
-  th{padding:12px 16px;text-align:left;font-weight:600;color:var(--text-muted);white-space:nowrap}
-  td{padding:12px 16px;border-top:1px solid var(--border);vertical-align:middle}
-  .status{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:500}
+  .main{max-width:1200px;margin:0 auto;padding:24px 24px 60px}
+  .toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px}
+  .toolbar h2{font-size:17px;font-weight:700;color:var(--text)}
+
+  /* ── Card / Table ── */
+  .card{background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--border);overflow:hidden;box-shadow:var(--shadow-sm)}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead{background:var(--bg-secondary)}
+  th{padding:11px 14px;text-align:left;font-weight:600;color:var(--text-muted);white-space:nowrap;font-size:12px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)}
+  td{padding:12px 14px;border-top:1px solid var(--border-light);vertical-align:middle}
+  tr:hover td{background:var(--card-hover)}
+
+  /* ── Status ── */
+  .status{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}
   .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
-  .dot-online{background:var(--success);box-shadow:0 0 6px var(--success)}
-  .dot-offline{background:#64748b}
-  .public-url{display:flex;align-items:center;gap:6px;font-family:"SF Mono",Consolas,monospace;font-size:13px;word-break:break-all}
-  .actions-cell{display:flex;gap:6px;flex-wrap:wrap}
+  .dot-online{background:var(--success);box-shadow:0 0 0 3px rgba(90,138,60,.15)}
+  .dot-offline{background:var(--text-muted);opacity:.5}
+  .public-url{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:12px;word-break:break-all;color:var(--text-secondary)}
+  .actions-cell{display:flex;gap:5px;flex-wrap:wrap}
+
+  /* ── Tags / Badges ── */
+  .tag{display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:5px;letter-spacing:.2px}
+  .tag-relay{background:var(--info-light);color:var(--info)}
+  .tag-p2p{background:var(--success-light);color:var(--success)}
+  .tag-ipv6{background:#E8F5E9;color:#2E7D32}
+  .tag-upnp{background:#E3F2FD;color:#1565C0}
+  .tag-dual{background:#F1F8E9;color:#33691E}
+
   /* ── Empty state ── */
-  .empty{text-align:center;padding:60px 20px;color:var(--text-muted)}
-  .empty .big{font-size:48px;margin-bottom:12px}
-  .empty p{font-size:15px;margin-bottom:4px}
+  .empty{text-align:center;padding:56px 20px;color:var(--text-muted)}
+  .empty .big{font-size:44px;margin-bottom:12px;opacity:.6}
+  .empty p{font-size:14px;margin-bottom:4px}
+
   /* ── Traffic ── */
   .traffic{font-size:12px;color:var(--text-muted);white-space:nowrap}
-  .traffic b{color:var(--text);font-weight:500}
+  .traffic b{color:var(--text);font-weight:600}
+
   /* ── Modal ── */
-  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;justify-content:center;align-items:center;padding:20px}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(60,56,54,.3);z-index:100;justify-content:center;align-items:center;padding:20px;backdrop-filter:blur(2px)}
   .modal-overlay.active{display:flex}
-  .modal{background:var(--card);border:1px solid var(--border);border-radius:12px;width:100%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow);animation:modalIn .2s ease}
-  @keyframes modalIn{from{opacity:0;transform:translateY(-16px)}to{opacity:1;transform:translateY(0)}}
+  .modal{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);width:100%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow-lg);animation:modalIn .22s ease}
+  @keyframes modalIn{from{opacity:0;transform:translateY(-12px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
   .modal-header{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 0}
-  .modal-header h3{font-size:17px;font-weight:600}
-  .modal-close{background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;padding:4px;line-height:1;border-radius:4px}.modal-close:hover{background:var(--border);color:var(--text)}
-  .modal-body{padding:20px 24px}
+  .modal-header h3{font-size:16px;font-weight:700;color:var(--text)}
+  .modal-close{background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;padding:4px 6px;line-height:1;border-radius:6px;transition:all var(--transition)}.modal-close:hover{background:var(--bg-secondary);color:var(--text)}
+  .modal-body{padding:18px 24px}
   .form-group{margin-bottom:16px}
-  .form-group label{display:block;font-size:13px;font-weight:500;color:var(--text-muted);margin-bottom:6px}
-  .form-group input,.form-group textarea{width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;outline:none;transition:border .15s}
-  .form-group input:focus,.form-group textarea:focus{border-color:var(--accent)}
+  .form-group label{display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px}
+  .form-group input,.form-group textarea{width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;transition:all var(--transition);font-family:var(--font-sans)}
+  .form-group input:focus,.form-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(192,121,42,.1)}
+  .form-group input::placeholder,.form-group textarea::placeholder{color:var(--text-muted);opacity:.7}
   .form-group textarea{resize:vertical;min-height:60px}
-  .form-actions{display:flex;justify-content:flex-end;gap:10px;padding:0 24px 20px}
+  .form-actions{display:flex;justify-content:flex-end;gap:8px;padding:0 24px 20px}
+
   /* ── Token box ── */
-  .token-box{background:#0c2d1a;border:1px solid #166534;border-radius:var(--radius);padding:14px;margin-top:12px}
-  .token-box .token-label{font-size:13px;color:var(--success);font-weight:600;margin-bottom:6px}
-  .token-box .token-value{font-family:"SF Mono",Consolas,monospace;font-size:14px;word-break:break-all;background:#0f172a;padding:10px 12px;border-radius:6px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
-  .token-box .token-value code{flex:1;white-space:pre-wrap}
+  .token-box{background:var(--accent-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-top:8px}
+  .token-box .token-label{font-size:12px;color:var(--accent);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.3px}
+  .token-box .token-value{font-family:var(--font-mono);font-size:13px;word-break:break-all;background:var(--bg);padding:10px 12px;border-radius:8px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;border:1px solid var(--border-light)}
+  .token-box .token-value code{flex:1;white-space:pre-wrap;color:var(--text)}
   .token-box .warning{margin-top:10px;font-size:12px;color:var(--warning);display:flex;align-items:flex-start;gap:6px}
+
   /* ── Log viewer ── */
-  .log-container{max-height:400px;overflow-y:auto;font-family:"SF Mono",Consolas,monospace;font-size:13px;background:var(--bg);border-radius:var(--radius);padding:4px 0}
-  .log-line{padding:6px 12px;border-bottom:1px solid var(--border);display:flex;gap:10px}
+  .log-container{max-height:400px;overflow-y:auto;font-family:var(--font-mono);font-size:12px;background:var(--bg);border-radius:8px;padding:4px 0;border:1px solid var(--border-light)}
+  .log-line{padding:6px 12px;border-bottom:1px solid var(--border-light);display:flex;gap:10px;transition:background var(--transition)}
+  .log-line:hover{background:var(--card-hover)}
   .log-line:last-child{border-bottom:none}
-  .log-time{color:var(--text-muted);white-space:nowrap;flex-shrink:0}
-  .log-action{color:var(--accent);font-weight:500;white-space:nowrap;flex-shrink:0;min-width:60px}
+  .log-time{color:var(--text-muted);white-space:nowrap;flex-shrink:0;font-size:11px}
+  .log-action{color:var(--accent);font-weight:600;white-space:nowrap;flex-shrink:0;min-width:60px}
   .log-msg{color:var(--text);word-break:break-all}
-  .log-empty{padding:30px;text-align:center;color:var(--text-muted)}
+  .log-empty{padding:30px;text-align:center;color:var(--text-muted);font-family:var(--font-sans)}
+
   /* ── Toast ── */
   .toast-container{position:fixed;top:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-  .toast{padding:12px 20px;border-radius:var(--radius);font-size:14px;font-weight:500;color:#fff;box-shadow:var(--shadow);animation:toastIn .25s ease,toastOut .3s ease 2.7s forwards;pointer-events:auto;max-width:360px;word-break:break-word}
-  .toast-success{background:#16a34a}
-  .toast-error{background:#dc2626}
-  .toast-info{background:#2563eb}
+  .toast{padding:11px 18px;border-radius:8px;font-size:13px;font-weight:600;color:#fff;box-shadow:var(--shadow-lg);animation:toastIn .25s ease,toastOut .3s ease 2.7s forwards;pointer-events:auto;max-width:340px;word-break:break-word;font-family:var(--font-sans)}
+  .toast-success{background:var(--success)}
+  .toast-error{background:var(--danger)}
+  .toast-info{background:var(--accent)}
   @keyframes toastIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
   @keyframes toastOut{to{opacity:0;transform:translateX(40px)}}
+
   /* ── Confirm dialog ── */
-  .confirm-text{font-size:14px;color:var(--text);margin:12px 0 4px;line-height:1.7}
+  .confirm-text{font-size:14px;color:var(--text-secondary);margin:12px 0 4px;line-height:1.7}
   .confirm-text strong{color:var(--danger)}
+
   /* ── Domain edit ── */
   .domain-edit-row{display:flex;align-items:center;gap:8px}
-  .domain-edit-row input{padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;font-family:"SF Mono",Consolas,monospace;width:220px;outline:none}
-  .domain-edit-row input:focus{border-color:var(--accent)}
+  .domain-edit-row input{padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:var(--font-mono);width:200px;outline:none;transition:all var(--transition)}
+  .domain-edit-row input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(192,121,42,.1)}
+
   /* ── Auth pages ── */
   .auth-container{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px}
-  .auth-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:40px;max-width:420px;width:100%;box-shadow:var(--shadow)}
-  .auth-card h2{font-size:22px;margin-bottom:6px;display:flex;align-items:center;gap:10px}
-  .auth-card .subtitle{color:var(--text-muted);margin-bottom:24px;font-size:14px}
-  .auth-card .form-group{margin-bottom:18px}
+  .auth-container::before{
+    content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;
+    background:radial-gradient(ellipse at 30% 20%, rgba(192,121,42,.05) 0%, transparent 50%),
+               radial-gradient(ellipse at 70% 80%, rgba(192,121,42,.03) 0%, transparent 50%);
+    pointer-events:none;
+  }
+  .auth-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:36px;max-width:400px;width:100%;box-shadow:var(--shadow-lg);position:relative}
+  .auth-card h2{font-size:20px;margin-bottom:4px;display:flex;align-items:center;gap:10px;color:var(--text)}
+  .auth-card .subtitle{color:var(--text-muted);margin-bottom:24px;font-size:13px}
+  .auth-card .form-group{margin-bottom:16px}
   .auth-card .form-actions{justify-content:stretch;padding:0}
   .auth-card .form-actions .btn{flex:1;justify-content:center}
-  /* ── Responsive ── */
-  @media(max-width:768px){
-    .header{padding:14px 16px}
-    .main{padding:16px}
-    th,td{padding:10px 12px;font-size:13px}
-    .modal{max-width:95vw}
-    .domain-edit-row input{width:160px}
+
+  /* ── Desktop: wide table columns ── */
+  @media(min-width:1024px){
+    .main{padding:28px 32px 60px}
+    .header{padding:14px 32px}
+    th,td{padding:12px 16px;font-size:13px}
   }
-  /* scrollbar */
+
+  /* ── Tablet ── */
+  @media(max-width:1023px){
+    .main{padding:20px 16px 60px}
+    .header{padding:12px 16px}
+  }
+
+  /* ── Mobile ── */
+  @media(max-width:768px){
+    .header{padding:12px 14px;gap:10px}
+    .header-title{font-size:17px}
+    .header-title .icon{width:24px;height:24px;font-size:13px}
+    .header-right{width:100%;justify-content:flex-end}
+    .domain-display{width:100%;justify-content:center;font-size:12px;padding:5px 10px}
+    .main{padding:14px 12px 80px}
+    .toolbar{flex-direction:column;align-items:stretch;gap:10px}
+    .toolbar h2{font-size:15px}
+    .toolbar .btn-primary{width:100%;justify-content:center}
+
+    /* Responsive table → card layout */
+    .table-wrap table, .table-wrap thead, .table-wrap tbody, .table-wrap th, .table-wrap td, .table-wrap tr {
+      display: block;
+    }
+    .table-wrap thead{display:none}
+    .table-wrap tr{
+      padding:14px;margin:8px;border:1px solid var(--border);border-radius:var(--radius);
+      background:var(--card);box-shadow:var(--shadow-sm);
+    }
+    .table-wrap tr:hover td{background:transparent}
+    .table-wrap td{
+      padding:3px 0;border:none;display:flex;align-items:center;justify-content:space-between;
+      font-size:13px;
+    }
+    .table-wrap td::before{
+      content:attr(data-label);font-weight:600;font-size:11px;color:var(--text-muted);
+      text-transform:uppercase;letter-spacing:.3px;flex-shrink:0;margin-right:12px;
+    }
+    .table-wrap td:first-child{
+      flex-direction:column;align-items:flex-start;gap:2px;
+    }
+    .table-wrap td:first-child::before{
+      margin-right:0;margin-bottom:2px;
+    }
+    .table-wrap td:first-child strong{font-size:14px}
+    .table-wrap .actions-cell{width:100%;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);margin-top:6px}
+    .table-wrap .actions-cell::before{display:none}
+    .table-wrap .traffic{flex-wrap:wrap;gap:2px 8px}
+    .table-wrap .public-url{flex-wrap:wrap}
+
+    /* Modals */
+    .modal{max-width:95vw;border-radius:var(--radius)}
+    .modal-header{padding:16px 18px 0}
+    .modal-header h3{font-size:15px}
+    .modal-body{padding:16px 18px}
+    .form-actions{padding:0 18px 16px}
+    .domain-edit-row input{width:100%}
+    .domain-edit-row{flex-wrap:wrap}
+
+    /* Auth */
+    .auth-card{padding:28px 22px;margin:12px}
+    .auth-card h2{font-size:18px}
+  }
+
+  /* ── Small phones ── */
+  @media(max-width:400px){
+    .header-title{font-size:15px}
+    .btn{padding:7px 12px;font-size:12px}
+    .btn-sm{padding:4px 8px;font-size:11px}
+    .actions-cell .btn{padding:5px 8px;font-size:11px}
+  }
+
+  /* ── Scrollbar ── */
   ::-webkit-scrollbar{width:6px;height:6px}
   ::-webkit-scrollbar-track{background:transparent}
   ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-  ::-webkit-scrollbar-thumb:hover{background:#475569}
+  ::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
 </style>
 </head>
 <body>
@@ -125,7 +273,7 @@
 <!-- ============ AUTH: Setup Password ============ -->
 <div class="auth-container" id="authSetup" style="display:none">
   <div class="auth-card">
-    <h2>&#x1F512; 设置管理密码</h2>
+    <h2><span class="icon" style="display:inline-flex;width:28px;height:28px;border-radius:7px;background:var(--accent);align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0">&#x1F512;</span> 设置管理密码</h2>
     <p class="subtitle">首次使用，请设置管理面板的登录密码</p>
     <div class="form-group">
       <label>密码（至少 4 位）</label>
@@ -144,7 +292,7 @@
 <!-- ============ AUTH: Login ============ -->
 <div class="auth-container" id="authLogin" style="display:none">
   <div class="auth-card">
-    <h2>&#x1F510; 登录管理面板</h2>
+    <h2><span class="icon" style="display:inline-flex;width:28px;height:28px;border-radius:7px;background:var(--accent);align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0">&#x1F510;</span> 登录管理面板</h2>
     <p class="subtitle">请输入管理密码</p>
     <div class="form-group">
       <label>密码</label>
@@ -165,11 +313,11 @@
 
 <!-- Header -->
 <header class="header">
-  <div class="header-title"><span class="emoji">&#x1F310;</span> Tunnel 隧道管理</div>
+  <div class="header-title"><span class="icon">&#x1F310;</span> Tunnel 管理面板</div>
   <div class="header-right">
     <div id="domainArea">
       <div class="domain-display">
-        <span class="label">&#x1F517; 域名:</span>
+        <span class="label">&#x1F517; 域名</span>
         <span id="domainText">{{ domain }}</span>
         <button class="btn btn-ghost btn-icon" onclick="showDomainEdit()" title="编辑域名">&#x270F;&#xFE0F;</button>
       </div>
@@ -191,8 +339,8 @@
         <thead>
           <tr>
             <th>名称</th>
-            <th>隧道编码</th>
-            <th>客户端地址</th>
+            <th>编码</th>
+            <th>客户端</th>
             <th>状态</th>
             <th>流量</th>
             <th>公网地址</th>
@@ -206,7 +354,7 @@
       <div class="empty">
         <div class="big">&#x1F50C;</div>
         <p>暂无隧道</p>
-        <p style="font-size:13px">点击上方"创建隧道"按钮添加第一个隧道</p>
+        <p style="font-size:13px">点击上方 "创建隧道" 按钮添加第一个隧道</p>
       </div>
     </div>
   </div>
@@ -227,7 +375,7 @@
         <input type="text" id="cName" placeholder="例如: my-web">
       </div>
       <div class="form-group">
-        <label>认证令牌 <span style="font-weight:400;color:var(--text-muted)">（留空自动生成）</span></label>
+        <label>认证令牌 <span style="font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0">（留空自动生成）</span></label>
         <input type="text" id="cToken" placeholder="自定义令牌，留空则自动生成">
       </div>
       <div class="form-group">
@@ -431,7 +579,6 @@ function showToast(msg, type) {
 
 /* ── Clipboard ── */
 function copyText(text) {
-  // 优先使用 Clipboard API (HTTPS)
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.writeText(text).then(function() {
       showToast('已复制', 'success');
@@ -459,12 +606,8 @@ function _fallbackCopy(text) {
     ta.setSelectionRange(0, text.length);
     ok = document.execCommand('copy');
     document.body.removeChild(ta);
-    if (ok) {
-      showToast('已复制', 'success');
-      return;
-    }
+    if (ok) { showToast('已复制', 'success'); return; }
   } catch(e) {}
-  // 最终兜底：弹窗让用户手动复制
   window.prompt('请手动复制以下内容：', text);
 }
 
@@ -483,7 +626,7 @@ function showDomainEdit() {
 function cancelDomainEdit() {
   document.getElementById('domainArea').innerHTML =
     '<div class="domain-display">' +
-      '<span class="label">&#x1F517; 域名:</span>' +
+      '<span class="label">&#x1F517; 域名</span>' +
       '<span id="domainText">' + escapeHtml(DOMAIN) + '</span>' +
       '<button class="btn btn-ghost btn-icon" onclick="showDomainEdit()" title="编辑域名">&#x270F;&#xFE0F;</button>' +
     '</div>';
@@ -531,46 +674,59 @@ function renderTunnels() {
     var bytesIn = info.bytes_in || 0;
     var bytesOut = info.bytes_out || 0;
 
-    // 解析 P2P 模式
+    // P2P mode badges
     var p2pInfo = null;
-    var p2pModeStr = '';
+    var p2pBadge = '';
     try { p2pInfo = t.p2p_info ? JSON.parse(t.p2p_info) : null; } catch(e) {}
     if (p2pInfo && p2pInfo.mode) {
-      var modeMap = {
-        'ipv6':  '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#065f46;color:#6ee7b7;font-weight:600">IPv6</span>',
-        'upnp':  '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#1e3a5f;color:#93c5fd;font-weight:600">UPnP</span>',
-        'dual':  '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#064e3b;color:#34d399;font-weight:600">Dual</span>'
+      var tagMap = {
+        'ipv6': '<span class="tag tag-ipv6">IPv6</span>',
+        'upnp': '<span class="tag tag-upnp">UPnP</span>',
+        'dual': '<span class="tag tag-dual">Dual</span>'
       };
-      p2pModeStr = modeMap[p2pInfo.mode] || '';
+      p2pBadge = tagMap[p2pInfo.mode] || '';
     } else if (p2pMode) {
-      p2pModeStr = '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#065f46;color:#6ee7b7;font-weight:600">P2P</span>';
+      p2pBadge = '<span class="tag tag-p2p">P2P</span>';
     }
-    var relayTag = online && !p2pMode ? '<span style="font-size:11px;padding:2px 6px;border-radius:4px;background:#1e3a5f;color:#93c5fd;font-weight:600">中继</span>' : '';
+    var relayTag = online && !p2pMode ? '<span class="tag tag-relay">中继</span>' : '';
+
+    // Traffic info line
+    var trafficModeLine = '';
+    if (p2pBadge) {
+      trafficModeLine = '<span style="font-size:11px;color:var(--success)">P2P 直连</span>';
+    } else if (online) {
+      trafficModeLine = '<span style="font-size:11px;color:var(--text-muted)">服务端中继</span>';
+    }
+
+    var escapedName = escapeHtml(t.name || '-');
+    var escapedPubUrl = escapeHtml(pubUrl).replace(/'/g, "\\'");
 
     html += '<tr>' +
-      '<td><strong>' + escapeHtml(t.name || '-') + '</strong>' +
+      '<td data-label="名称"><strong>' + escapedName + '</strong>' +
         (t.description ? '<br><span style="font-size:12px;color:var(--text-muted)">' + escapeHtml(t.description) + '</span>' : '') +
       '</td>' +
-      '<td style="font-family:monospace;font-size:13px;color:var(--text-muted)">' + escapeHtml(t.code || sid) + '</td>' +
-      '<td style="font-family:monospace;font-size:13px">' + (t.local_host || t.local_port ? escapeHtml((t.local_host || 'localhost') + ':' + t.local_port) : '<span style="color:var(--text-muted);font-size:12px">未连接</span>') + '</td>' +
-      '<td>' +
+      '<td data-label="编码" style="font-family:var(--font-mono);font-size:13px;color:var(--text-muted)">' + escapeHtml(code) + '</td>' +
+      '<td data-label="客户端" style="font-family:var(--font-mono);font-size:13px">' + (t.local_host || t.local_port ? escapeHtml((t.local_host || 'localhost') + ':' + t.local_port) : '<span style="color:var(--text-muted);font-size:12px">未连接</span>') + '</td>' +
+      '<td data-label="状态">' +
         '<span class="status">' +
           '<span class="dot ' + (online ? 'dot-online' : 'dot-offline') + '"></span>' +
-          (online ? '在线 ' + p2pModeStr + relayTag : '离线') +
+          (online ? '在线 ' + p2pBadge + relayTag : '离线') +
         '</span>' +
       '</td>' +
-      '<td class="traffic">' +
-        (p2pModeStr ? '<span style="font-size:11px;color:var(--success)">P2P 直连</span>' : (online ? '<span style="font-size:11px;color:var(--text-muted)">服务端中继</span>' : '')) +
-        '&#x2B06; <b>' + formatBytes(bytesIn) + '</b><br>&#x2B07; <b>' + formatBytes(bytesOut) + '</b>' +
+      '<td data-label="流量">' +
+        '<span class="traffic">' +
+          (trafficModeLine ? trafficModeLine + ' &middot; ' : '') +
+          '&#x2B06; <b>' + formatBytes(bytesIn) + '</b> &middot; &#x2B07; <b>' + formatBytes(bytesOut) + '</b>' +
+        '</span>' +
       '</td>' +
-      '<td><div class="public-url">' +
+      '<td data-label="地址"><div class="public-url">' +
         '<span style="flex:1">' + escapeHtml(pubUrl) + '</span>' +
-        '<button class="btn btn-ghost btn-icon btn-sm" onclick="copyText(\'' + escapeHtml(pubUrl).replace(/'/g, "\\'") + '\')" title="复制">&#x1F4CB;</button>' +
+        '<button class="btn btn-ghost btn-icon btn-sm" onclick="copyText(\'' + escapedPubUrl + '\')" title="复制">&#x1F4CB;</button>' +
       '</div></td>' +
-      '<td><div class="actions-cell">' +
-        '<button class="btn btn-ghost btn-sm" onclick="viewToken(\'' + sid + '\',\'' + escapeHtml(t.name || t.code || sid) + '\')">&#x1F511; 密钥</button>' +
-        '<button class="btn btn-ghost btn-sm" onclick="openLogModal(\'' + sid + '\',\'' + escapeHtml(t.name || t.code || sid) + '\')">&#x1F4CB; 日志</button>' +
-        '<button class="btn btn-danger btn-sm" onclick="confirmDelete(\'' + sid + '\',\'' + escapeHtml(t.name || t.code || sid) + '\')">&#x1F5D1;&#xFE0F;</button>' +
+      '<td data-label="操作"><div class="actions-cell">' +
+        '<button class="btn btn-ghost btn-sm" onclick="viewToken(\'' + sid + '\',\'' + escapedName + '\')">&#x1F511; 密钥</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="openLogModal(\'' + sid + '\',\'' + escapedName + '\')">&#x1F4CB; 日志</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="confirmDelete(\'' + sid + '\',\'' + escapedName + '\')">&#x1F5D1;&#xFE0F;</button>' +
       '</div></td>' +
     '</tr>';
   });
@@ -613,7 +769,7 @@ function viewToken(id, name) {
     .then(function(data) {
       var token = data.auth_token || '';
       document.getElementById('tokenContent').innerHTML =
-        '<p style="margin-bottom:8px;color:var(--text-muted)">隧道: <strong>' + escapeHtml(name) + '</strong></p>' +
+        '<p style="margin-bottom:8px;color:var(--text-muted);font-size:13px">隧道: <strong style="color:var(--text)">' + escapeHtml(name) + '</strong></p>' +
         '<div class="token-box">' +
           '<div class="token-label">&#x1F512; 认证令牌</div>' +
           '<div class="token-value"><code id="viewTokenCode">' + escapeHtml(token) + '</code>' +
@@ -686,7 +842,7 @@ function createTunnel() {
         '<div class="token-value"><code id="tokenCode">' + escapeHtml(token) + '</code>' +
           '<button class="btn btn-primary btn-sm" onclick="copyText(document.getElementById(\'tokenCode\').textContent)">&#x1F4CB; 复制</button>' +
         '</div>' +
-        '<div class="warning">&#x26A0;&#xFE0F; 请保存此认证令牌，关闭后将无法再次查看（可在列表中点击"密钥"查看）</div>' +
+        '<div class="warning">&#x26A0;&#xFE0F; 请保存此认证令牌，关闭后将无法再次查看（可在列表中点击 "密钥" 查看）</div>' +
       '</div>';
   })
   .catch(function() {
@@ -784,7 +940,7 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-/* ── Init: check auth first ── */
+/* ── Init ── */
 checkAuth();
 </script>
 </body>
