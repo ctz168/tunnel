@@ -844,16 +844,27 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
 
     code = tunnel["code"]
 
-    # ---- 如果已有同编码的连接，先关闭旧连接 ----
+    # ---- 如果已有同编码的活跃连接，拒绝新连接（防止多客户端互相踢导致死循环） ----
     if code in active_tunnels:
         old_ws = active_tunnels[code]
-        try:
-            await old_ws.close(code=4008, message=b"Replaced by new connection")
-        except Exception:
-            pass
-        # 清理旧连接的元数据
-        tunnel_meta.pop(code, None)
-        tunnel_ws_info.pop(code, None)
+        if not old_ws.closed:
+            logger.warning(
+                f"隧道 {code} 已有活跃连接，拒绝重复连接 (IP: {request.remote or ''})"
+            )
+            try:
+                await ws.send_json({
+                    "type": "error",
+                    "message": "Duplicate connection: tunnel already has an active connection",
+                })
+            except Exception:
+                pass
+            await ws.close(code=4009, message=b"Duplicate key: already connected")
+            return ws
+        else:
+            # 旧连接已关闭但尚未清理，直接清理残留
+            tunnel_meta.pop(code, None)
+            tunnel_ws_info.pop(code, None)
+            active_tunnels.pop(code, None)
 
     # ---- 注册新连接 ----
     active_tunnels[code] = ws
@@ -1100,8 +1111,12 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 if future and not future.done():
                     future.set_exception(Exception("Tunnel disconnected"))
 
-        # 清理 TCP 隧道资源
-        await _cleanup_tcp_for_tunnel(code)
+        # 清理 TCP 隧道资源（仅当前连接仍为活跃连接时才清理，避免新连接的 TCP 服务被误删）
+        if active_tunnels.get(code) is not ws:
+            # 当前连接已被新连接替代，不清理 TCP（新连接正在使用）
+            pass
+        else:
+            await _cleanup_tcp_for_tunnel(code)
 
     return ws
 
