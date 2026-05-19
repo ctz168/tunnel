@@ -177,12 +177,30 @@ def _now_iso() -> str:
 
 # ======================== TCP 隧道辅助函数 ========================
 
-def _allocate_tcp_port(code: str) -> int | None:
-    """从端口范围中分配一个 TCP 端口给指定隧道，返回分配的端口号或 None"""
+def _allocate_tcp_port(code: str, preferred_port: int | None = None) -> int | None:
+    """从端口范围中分配一个 TCP 端口给指定隧道
+
+    如果提供了 preferred_port 且该端口未被占用（或之前就是自己的），则优先使用该端口（用于重连时复用旧端口）。
+    否则从 _next_tcp_port 开始扫描寻找空闲端口。
+    """
     global _next_tcp_port
+
+    # 优先使用指定端口（重连复用）
+    if preferred_port is not None and TCP_PORT_START <= preferred_port <= TCP_PORT_END:
+        existing = tcp_port_map.get(preferred_port)
+        if existing is None or existing == code:
+            # 端口空闲，或之前就是自己的端口（断开重连）
+            tcp_port_map[preferred_port] = code
+            _next_tcp_port = preferred_port + 1
+            if _next_tcp_port > TCP_PORT_END:
+                _next_tcp_port = TCP_PORT_START
+            return preferred_port
+
+    # 指定端口不可用或未指定，扫描分配
     for offset in range(TCP_PORT_END - TCP_PORT_START + 1):
         port = TCP_PORT_START + ((_next_tcp_port - TCP_PORT_START + offset) % (TCP_PORT_END - TCP_PORT_START + 1))
-        if port not in tcp_port_map:
+        existing = tcp_port_map.get(port)
+        if existing is None or existing == code:
             tcp_port_map[port] = code
             _next_tcp_port = port + 1
             if _next_tcp_port > TCP_PORT_END:
@@ -287,18 +305,28 @@ async def _start_tcp_listener(code: str, public_port: int, local_port: int):
         tcp_port_map.pop(public_port, None)
 
 
-async def _stop_tcp_listener(public_port: int):
-    """停止指定端口的 TCP 监听器"""
+async def _stop_tcp_listener(public_port: int, release_port: bool = True):
+    """停止指定端口的 TCP 监听器
+
+    Args:
+        public_port: 要停止的端口
+        release_port: 是否同时释放端口映射（断开时为 False，仅停止监听但保留映射以便重连复用）
+    """
     server = tcp_listeners.pop(public_port, None)
     if server:
         server.close()
         await server.wait_closed()
         logger.info(f"TCP 监听器已停止: 端口 {public_port}")
-    tcp_port_map.pop(public_port, None)
+    if release_port:
+        tcp_port_map.pop(public_port, None)
 
 
 async def _cleanup_tcp_for_tunnel(code: str):
-    """清理指定隧道的所有 TCP 资源（关闭流 + 停止监听器 + 释放端口）"""
+    """清理指定隧道的所有 TCP 资源（关闭流 + 停止监听器）
+
+    注意：端口映射不从 tcp_port_map 中释放，保留以便重连时复用。
+    如果需要彻底释放端口（如删除隧道），请手动调用 _stop_tcp_listener(port, release_port=True)。
+    """
     # 清理就绪事件
     events = tcp_ready_events.pop(code, {})
     for stream_id, event in events.items():
@@ -313,12 +341,12 @@ async def _cleanup_tcp_for_tunnel(code: str):
         except Exception:
             pass
 
-    # 停止 TCP 监听器并释放端口
+    # 停止 TCP 监听器（但不释放端口映射，保留以便重连复用）
     services = tcp_services.pop(code, [])
     for svc in services:
         port = svc.get("public_port")
         if port:
-            await _stop_tcp_listener(port)
+            await _stop_tcp_listener(port, release_port=False)
 
 
 async def _handle_tcp_binary(code: str, data: bytes):
@@ -397,13 +425,26 @@ _DEFAULT_HTML = """<!DOCTYPE html>
 
 async def on_startup(app: web.Application):
     """服务启动时初始化数据库、打印横幅"""
-    global _db
+    global _db, _next_tcp_port
 
     # 初始化数据库表结构
     await tunnel_db.init_db()
 
     # 建立全局数据库连接（后续请求复用）
     _db = await aiosqlite.connect(DB_PATH)
+
+    # 从数据库加载已持久化的 TCP 端口映射，避免重连时重复分配
+    cursor = await _db.execute("SELECT tunnel_code, public_port FROM tunnel_tcp_port")
+    rows = await cursor.fetchall()
+    for row in rows:
+        t_code, port = row[0], row[1]
+        tcp_port_map[port] = t_code
+        logger.info(f"TCP 端口恢复: {port} -> 隧道 {t_code}")
+    if tcp_port_map:
+        # 更新 _next_tcp_port 到已分配的最大端口之后
+        max_port = max(tcp_port_map.keys())
+        _next_tcp_port = max_port + 1 if max_port < TCP_PORT_END else TCP_PORT_START
+        logger.info(f"已恢复 {len(tcp_port_map)} 个 TCP 端口映射，下一个可用端口: {_next_tcp_port}")
 
     # 打印启动横幅
     domain = await _get_server_domain()
@@ -954,21 +995,33 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                     # 客户端注册 TCP 转发服务（如 SSH）
                     services = data.get("services", [])
                     allocated = []
+
+                    # 从数据库加载该隧道之前持久化的端口映射，用于重连复用
+                    persisted_ports = await tunnel_db.get_tcp_ports(db, code)
+                    persisted_map = {svc["local_port"]: svc["public_port"] for svc in persisted_ports}
+
                     for svc in services:
                         lp = svc.get("local_port")
                         name = svc.get("name", f"port-{lp}")
                         if not lp:
                             continue
-                        public_port = _allocate_tcp_port(code)
+                        lp_int = int(lp)
+                        # 优先复用之前分配的端口
+                        preferred = persisted_map.get(lp_int)
+                        public_port = _allocate_tcp_port(code, preferred_port=preferred)
                         if public_port is None:
                             logger.warning(f"隧道 {code} TCP 端口分配失败: 无可用端口")
                             continue
-                        await _start_tcp_listener(code, public_port, int(lp))
+                        await _start_tcp_listener(code, public_port, lp_int)
                         allocated.append({
-                            "local_port": int(lp),
+                            "local_port": lp_int,
                             "public_port": public_port,
                             "name": name,
                         })
+                        # 持久化端口映射到数据库
+                        await tunnel_db.save_tcp_port(db, code, lp_int, public_port, name)
+                        if preferred and public_port == preferred:
+                            logger.info(f"隧道 {code} TCP 端口复用: {name} -> {public_port} (local:{lp_int})")
                     if code not in tcp_services:
                         tcp_services[code] = []
                     tcp_services[code].extend(allocated)
