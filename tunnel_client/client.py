@@ -431,13 +431,14 @@ class P2PProxy:
 
 class TunnelClient:
     def __init__(self, server: str, key: str, local_port: int, local_host: str,
-                 p2p: bool, p2p_port: int):
+                 p2p: bool, p2p_port: int, tcp_ports: str = ""):
         self.server = server
         self.key = key
         self.local_port = local_port
         self.local_host = local_host
         self.p2p = p2p
         self.p2p_port = p2p_port
+        self.tcp_ports = tcp_ports  # 逗号分隔的端口号，如 "22,3306"
         self.ws: aiohttp.ClientWebSocketResponse | None = None
         self.session: aiohttp.ClientSession | None = None
         self.req_count = 0
@@ -452,13 +453,20 @@ class TunnelClient:
         # P2P 模式: "ipv6" | "upnp" | "dual" | "relay"
         self._p2p_mode = "relay"
         self._upnp_opened = False
+        # ---- TCP 隧道状态 ----
+        # 活跃的 TCP 流: stream_id -> {"reader": StreamReader, "writer": StreamWriter, "task": Task}
+        self._tcp_streams: dict[str, dict] = {}
+        # 已注册的 TCP 服务: [{local_port, public_port, name}]
+        self._tcp_services: list[dict] = []
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.4 (IPv6/IPv4 P2P + Relay + Path-Rewrite)")
+        print(f"\n  Tunnel Client v2.5 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)")
         print(f"  服务器:   {self.server}")
         print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:     {self.local_host}:{self.local_port}")
         print(f"  P2P:      {'启用 (端口 ' + str(self.p2p_port) + ')' if self.p2p else '禁用'}")
+        if self.tcp_ports:
+            print(f"  TCP转发:  {self.tcp_ports}")
         print()
 
         self.session = aiohttp.ClientSession()
@@ -494,6 +502,9 @@ class TunnelClient:
                     except json.JSONDecodeError:
                         continue
                     await self._handle(data)
+                elif msg.type == aiohttp.WSMsgType.BINARY:
+                    # TCP 隧道数据帧
+                    await self._handle_tcp_binary(msg.data)
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     print(f"  [错误] WebSocket: {ws.exception()}")
                     break
@@ -527,6 +538,22 @@ class TunnelClient:
                 self._status_task.cancel()
             self._status_task = asyncio.create_task(self._status_loop(self._tunnel_code))
 
+            # 注册 TCP 转发服务（如果有配置）
+            if self.tcp_ports and self.ws and not self.ws.closed:
+                services = []
+                for port_str in self.tcp_ports.split(","):
+                    port_str = port_str.strip()
+                    if port_str.isdigit():
+                        lp = int(port_str)
+                        name_map = {22: "ssh", 21: "ftp", 3306: "mysql", 5432: "postgresql", 6379: "redis", 27017: "mongodb"}
+                        name = name_map.get(lp, f"tcp-{lp}")
+                        services.append({"local_port": lp, "name": name})
+                if services:
+                    await self.ws.send_json({
+                        "type": "tcp_register",
+                        "services": services,
+                    })
+
         elif t == "ping":
             # 心跳响应：必须立即回复，不等待任何其他操作
             if self.ws and not self.ws.closed:
@@ -539,6 +566,22 @@ class TunnelClient:
             # 中继模式：用独立任务处理转发请求，不阻塞消息循环
             # 这样心跳 pong 不会被长时间代理请求阻塞
             asyncio.create_task(self._proxy_request_safe(data))
+
+        elif t == "tcp_registered":
+            # 服务端已分配 TCP 公网端口
+            services = data.get("services", [])
+            self._tcp_services = services
+            for svc in services:
+                print(f"  [TCP] {svc.get('name', 'tcp')} -> localhost:{svc.get('local_port')} (公网端口: {svc.get('public_port')})")
+
+        elif t == "tcp_open":
+            # 服务端通知：有新的外部 TCP 连接，需要连接本地端口
+            asyncio.create_task(self._handle_tcp_open(data))
+
+        elif t == "tcp_close":
+            # 服务端通知：外部 TCP 连接已断开，关闭本地连接
+            stream_id = data.get("stream_id", "")
+            await self._close_tcp_stream(stream_id)
 
         elif t == "error":
             print(f"  [错误] {data.get('message', '未知错误')}")
@@ -776,6 +819,132 @@ class TunnelClient:
             await self.ws.send_json(payload)
             self.req_count += 1
 
+    # ======================== TCP 隧道方法 ========================
+
+    async def _handle_tcp_open(self, data: dict):
+        """处理服务端的 tcp_open 消息：连接本地 TCP 端口，开始双向数据中继"""
+        stream_id = data.get("stream_id", "")
+        local_port = data.get("local_port", 0)
+        if not stream_id or not local_port:
+            return
+
+        try:
+            reader, writer = await asyncio.open_connection(self.local_host, local_port)
+        except Exception as e:
+            print(f"  [TCP] 连接本地端口 {local_port} 失败: {e}")
+            # 通知服务端连接失败
+            try:
+                if self.ws and not self.ws.closed:
+                    await self.ws.send_json({
+                        "type": "tcp_close",
+                        "stream_id": stream_id,
+                    })
+            except Exception:
+                pass
+            return
+
+        # 启动本地→WebSocket 的数据中继任务
+        task = asyncio.create_task(self._tcp_local_relay(stream_id, reader, writer))
+        self._tcp_streams[stream_id] = {
+            "reader": reader,
+            "writer": writer,
+            "task": task,
+        }
+
+    async def _tcp_local_relay(self, stream_id: str, reader: asyncio.StreamReader,
+                                writer: asyncio.StreamWriter):
+        """从本地 TCP 连接读取数据，通过 WebSocket 二进制帧发送到服务端
+
+        数据流: localhost:port -> client -> WebSocket 二进制帧 -> server -> 外部用户
+        二进制帧格式: [1字节 stream_id长度][N字节 stream_id(ASCII)][剩余字节 TCP数据]
+        """
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                # 构造二进制帧
+                sid_bytes = stream_id.encode("ascii")
+                frame = bytes([len(sid_bytes)]) + sid_bytes + data
+                if self.ws and not self.ws.closed:
+                    await self.ws.send_bytes(frame)
+                else:
+                    break
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError, OSError):
+            pass
+        finally:
+            # 本地连接关闭，通知服务端
+            try:
+                if self.ws and not self.ws.closed:
+                    await self.ws.send_json({
+                        "type": "tcp_close",
+                        "stream_id": stream_id,
+                    })
+            except Exception:
+                pass
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            self._tcp_streams.pop(stream_id, None)
+
+    async def _handle_tcp_binary(self, data: bytes):
+        """处理 WebSocket 二进制帧：将 TCP 数据转发到本地连接
+
+        二进制帧格式: [1字节 stream_id长度][N字节 stream_id(ASCII)][剩余字节 TCP数据]
+        """
+        if len(data) < 2:
+            return
+        sid_len = data[0]
+        if len(data) < 1 + sid_len:
+            return
+        stream_id = data[1:1 + sid_len].decode("ascii", errors="replace")
+        tcp_data = data[1 + sid_len:]
+
+        stream = self._tcp_streams.get(stream_id)
+        if not stream:
+            return
+        writer = stream.get("writer")
+        if not writer:
+            return
+        try:
+            writer.write(tcp_data)
+            await writer.drain()
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            await self._close_tcp_stream(stream_id)
+
+    async def _close_tcp_stream(self, stream_id: str):
+        """关闭指定的 TCP 流"""
+        stream = self._tcp_streams.pop(stream_id, None)
+        if not stream:
+            return
+        # 取消中继任务
+        task = stream.get("task")
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        # 关闭本地连接
+        writer = stream.get("writer")
+        if writer:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    async def _cleanup_all_tcp(self):
+        """关闭所有 TCP 流"""
+        for stream_id in list(self._tcp_streams.keys()):
+            await self._close_tcp_stream(stream_id)
+        self._tcp_streams.clear()
+        self._tcp_services.clear()
+
+    # ======================== 状态显示 ========================
+
     async def _status_loop(self, code: str):
         while self._running:
             await asyncio.sleep(60)
@@ -796,6 +965,7 @@ class TunnelClient:
     async def close(self):
         self._running = False
         await self._stop_p2p()
+        await self._cleanup_all_tcp()
         if self._status_task:
             self._status_task.cancel()
         if self.ws and not self.ws.closed:
@@ -806,18 +976,24 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.4 (IPv6/IPv4 P2P + Relay + Path-Rewrite)",
+        description="Tunnel Client v2.5 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   tunnel-p2p-client --key YOUR_TOKEN --port 8080
   tunnel-p2p-client -k YOUR_TOKEN -p 3000 -s aicq.online:7739
   tunnel-p2p-client -k YOUR_TOKEN -p 80 --no-p2p
+  tunnel-p2p-client -k YOUR_TOKEN -p 8080 --tcp-ports 22       转发 SSH
+  tunnel-p2p-client -k YOUR_TOKEN -p 8080 --tcp-ports 22,3306  转发 SSH + MySQL
 
 P2P 模式 (默认启用):
   优先级: IPv6 直连 > UPnP IPv4 > 中继
   --p2p-port  指定 P2P 监听端口 (默认与本地端口相同)
   --no-p2p     强制禁用 P2P，仅使用中继
+
+TCP 转发:
+  --tcp-ports  逗号分隔的本地 TCP 端口，服务端会为每个端口分配公网端口
+               支持: SSH(22), MySQL(3306), PostgreSQL(5432), Redis(6379) 等
         """,
     )
     parser.add_argument("-k", "--key", required=True, help="认证令牌")
@@ -826,6 +1002,7 @@ P2P 模式 (默认启用):
     parser.add_argument("--host", default="localhost", help="本地服务地址 (默认: localhost)")
     parser.add_argument("--p2p-port", type=int, default=0, help="P2P 监听端口 (默认: 与本地端口相同)")
     parser.add_argument("--no-p2p", action="store_true", help="禁用 P2P，强制使用中继模式")
+    parser.add_argument("--tcp-ports", default="", help="TCP 转发端口，逗号分隔 (如: 22,3306)")
     args = parser.parse_args()
 
     p2p_enabled = not args.no_p2p
@@ -838,6 +1015,7 @@ P2P 模式 (默认启用):
         local_host=args.host,
         p2p=p2p_enabled,
         p2p_port=p2p_port,
+        tcp_ports=args.tcp_ports.strip(),
     )
 
     loop = asyncio.new_event_loop()

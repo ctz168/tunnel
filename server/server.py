@@ -91,6 +91,26 @@ _HOP_BY_HOP = frozenset({
     "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade",
 })
 
+# ======================== TCP 隧道配置 ========================
+# TCP 端口范围，用于分配给客户端的 TCP 转发服务（如 SSH）
+TCP_PORT_START = int(os.environ.get("TCP_PORT_START", "7800"))
+TCP_PORT_END = int(os.environ.get("TCP_PORT_END", "7899"))
+
+# 已分配的 TCP 端口: port -> tunnel_code
+tcp_port_map: dict[int, str] = {}
+
+# TCP 监听器: port -> asyncio.Server
+tcp_listeners: dict[int, asyncio.Server] = {}
+
+# 活跃 TCP 流: code -> {stream_id -> (reader, writer)}
+tcp_streams: dict[str, dict[str, tuple[asyncio.StreamReader, asyncio.StreamWriter]]] = {}
+
+# TCP 服务注册: code -> [{"local_port": 22, "public_port": 7801, "name": "ssh"}]
+tcp_services: dict[str, list[dict]] = {}
+
+# 下一个可用的 TCP 端口
+_next_tcp_port: int = TCP_PORT_START
+
 
 # ======================== 工具函数 ========================
 
@@ -151,6 +171,159 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# ======================== TCP 隧道辅助函数 ========================
+
+def _allocate_tcp_port(code: str) -> int | None:
+    """从端口范围中分配一个 TCP 端口给指定隧道，返回分配的端口号或 None"""
+    global _next_tcp_port
+    for offset in range(TCP_PORT_END - TCP_PORT_START + 1):
+        port = TCP_PORT_START + ((_next_tcp_port - TCP_PORT_START + offset) % (TCP_PORT_END - TCP_PORT_START + 1))
+        if port not in tcp_port_map:
+            tcp_port_map[port] = code
+            _next_tcp_port = port + 1
+            if _next_tcp_port > TCP_PORT_END:
+                _next_tcp_port = TCP_PORT_START
+            return port
+    return None
+
+
+async def _start_tcp_listener(code: str, public_port: int, local_port: int):
+    """启动 TCP 监听器，将外部连接通过 WebSocket 二进制帧转发到客户端
+
+    数据流:
+      外部用户 -> TCP 连接 -> 服务端 -> WebSocket 二进制帧 -> 客户端 -> localhost:local_port
+    二进制帧格式: [1字节 stream_id长度][N字节 stream_id(ASCII)][剩余字节 TCP数据]
+    """
+    async def handle_connection(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        stream_id = uuid.uuid4().hex[:8]
+
+        # 注册流
+        if code not in tcp_streams:
+            tcp_streams[code] = {}
+        tcp_streams[code][stream_id] = (reader, writer)
+
+        # 通知客户端打开本地 TCP 连接
+        ws = active_tunnels.get(code)
+        if not ws or ws.closed:
+            writer.close()
+            await writer.wait_closed()
+            tcp_streams.get(code, {}).pop(stream_id, None)
+            return
+
+        try:
+            await ws.send_json({
+                "type": "tcp_open",
+                "stream_id": stream_id,
+                "local_port": local_port,
+            })
+        except Exception:
+            writer.close()
+            await writer.wait_closed()
+            tcp_streams.get(code, {}).pop(stream_id, None)
+            return
+
+        # 从外部连接读取数据，通过 WebSocket 二进制帧转发到客户端
+        try:
+            while True:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                # 二进制帧: [1字节 sid_len][sid][data]
+                sid_bytes = stream_id.encode("ascii")
+                frame = bytes([len(sid_bytes)]) + sid_bytes + data
+                if ws and not ws.closed:
+                    await ws.send_bytes(frame)
+                else:
+                    break
+        except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError, OSError):
+            pass
+        finally:
+            # 通知客户端流已关闭
+            try:
+                if ws and not ws.closed:
+                    await ws.send_json({
+                        "type": "tcp_close",
+                        "stream_id": stream_id,
+                    })
+            except Exception:
+                pass
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            tcp_streams.get(code, {}).pop(stream_id, None)
+
+    try:
+        server = await asyncio.start_server(handle_connection, "0.0.0.0", public_port)
+        tcp_listeners[public_port] = server
+        logger.info(f"TCP 监听器已启动: 端口 {public_port} -> 隧道 {code} (本地端口 {local_port})")
+    except OSError as e:
+        logger.error(f"TCP 监听器启动失败: 端口 {public_port}: {e}")
+        tcp_port_map.pop(public_port, None)
+
+
+async def _stop_tcp_listener(public_port: int):
+    """停止指定端口的 TCP 监听器"""
+    server = tcp_listeners.pop(public_port, None)
+    if server:
+        server.close()
+        await server.wait_closed()
+        logger.info(f"TCP 监听器已停止: 端口 {public_port}")
+    tcp_port_map.pop(public_port, None)
+
+
+async def _cleanup_tcp_for_tunnel(code: str):
+    """清理指定隧道的所有 TCP 资源（关闭流 + 停止监听器 + 释放端口）"""
+    # 关闭所有活跃的 TCP 流
+    streams = tcp_streams.pop(code, {})
+    for stream_id, (reader, writer) in streams.items():
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+    # 停止 TCP 监听器并释放端口
+    services = tcp_services.pop(code, [])
+    for svc in services:
+        port = svc.get("public_port")
+        if port:
+            await _stop_tcp_listener(port)
+
+
+async def _handle_tcp_binary(code: str, data: bytes):
+    """处理 WebSocket 二进制帧，将 TCP 数据转发到对应的外部连接
+
+    二进制帧格式: [1字节 stream_id长度][N字节 stream_id(ASCII)][剩余字节 TCP数据]
+    """
+    if len(data) < 2:
+        return
+    sid_len = data[0]
+    if len(data) < 1 + sid_len:
+        return
+    stream_id = data[1:1 + sid_len].decode("ascii", errors="replace")
+    tcp_data = data[1 + sid_len:]
+
+    # 查找对应的 TCP 流
+    streams = tcp_streams.get(code, {})
+    pair = streams.get(stream_id)
+    if not pair:
+        return
+    _, writer = pair
+    try:
+        writer.write(tcp_data)
+        await writer.drain()
+    except (ConnectionResetError, BrokenPipeError, OSError):
+        # 外部连接已断开，清理流
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+        streams.pop(stream_id, None)
+
+
 # 默认说明页 HTML（当路径不匹配隧道编码时展示）
 _DEFAULT_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -205,6 +378,7 @@ async def on_startup(app: web.Application):
 
     # 打印启动横幅
     domain = await _get_server_domain()
+    tcp_info = f"{TCP_PORT_START}-{TCP_PORT_END}" if TCP_PORT_START else "禁用"
     banner = f"""
 ╔══════════════════════════════════════════════════╗
 ║              Tunnel Server 已启动              ║
@@ -212,6 +386,7 @@ async def on_startup(app: web.Application):
 ║  域名  : {domain:<38s}║
 ║  端口  : {SERVER_PORT:<38d}║
 ║  地址  : http://0.0.0.0:{SERVER_PORT:<27d}║
+║  TCP   : {tcp_info:<38s}║
 ╚══════════════════════════════════════════════════╝"""
     logger.info(f"域名: {domain}  端口: {SERVER_PORT}")
     logger.info(f"地址: http://0.0.0.0:{SERVER_PORT}")
@@ -253,6 +428,10 @@ async def on_cleanup(app: web.Application):
         except Exception:
             pass
     admin_sse_clients.clear()
+
+    # 关闭所有 TCP 监听器和流
+    for code in list(tcp_services.keys()):
+        await _cleanup_tcp_for_tunnel(code)
 
     # 取消所有待处理请求
     for req_id, future in list(pending_requests.items()):
@@ -742,6 +921,52 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                     if future and not future.done():
                         future.set_result(data)
 
+                elif msg_type == "tcp_register":
+                    # 客户端注册 TCP 转发服务（如 SSH）
+                    services = data.get("services", [])
+                    allocated = []
+                    for svc in services:
+                        lp = svc.get("local_port")
+                        name = svc.get("name", f"port-{lp}")
+                        if not lp:
+                            continue
+                        public_port = _allocate_tcp_port(code)
+                        if public_port is None:
+                            logger.warning(f"隧道 {code} TCP 端口分配失败: 无可用端口")
+                            continue
+                        await _start_tcp_listener(code, public_port, int(lp))
+                        allocated.append({
+                            "local_port": int(lp),
+                            "public_port": public_port,
+                            "name": name,
+                        })
+                    if code not in tcp_services:
+                        tcp_services[code] = []
+                    tcp_services[code].extend(allocated)
+                    # 通知客户端已分配的端口
+                    await ws.send_json({
+                        "type": "tcp_registered",
+                        "services": allocated,
+                    })
+                    logger.info(f"隧道 {code} TCP 服务已注册: {allocated}")
+
+                elif msg_type == "tcp_close":
+                    # 客户端关闭了一个 TCP 流（本地端断开）
+                    stream_id = data.get("stream_id", "")
+                    streams = tcp_streams.get(code, {})
+                    pair = streams.pop(stream_id, None)
+                    if pair:
+                        _, writer = pair
+                        try:
+                            writer.close()
+                            await writer.wait_closed()
+                        except Exception:
+                            pass
+
+            elif msg.type == web.WSMsgType.BINARY:
+                # TCP 隧道数据帧：转发到对应的外部 TCP 连接
+                await _handle_tcp_binary(code, msg.data)
+
             elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
                 break
 
@@ -784,6 +1009,9 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 future = pending_requests.pop(req_id, None)
                 if future and not future.done():
                     future.set_exception(Exception("Tunnel disconnected"))
+
+        # 清理 TCP 隧道资源
+        await _cleanup_tcp_for_tunnel(code)
 
     return ws
 
