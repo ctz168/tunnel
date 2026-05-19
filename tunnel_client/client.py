@@ -211,15 +211,24 @@ def upnp_close(port):
 # JS 拦截器：注入到 HTML 页面中，在运行时为所有 fetch/XHR/DOM 绝对路径
 # 自动添加隧道路径前缀，这样被代理的 Web 应用无需任何修改即可在
 # http://tunnel-server/TUNNEL_CODE/ 下正常工作。
+# 参考 IDE 项目 browser.py 的 _inject_script_interceptor 技术。
 _TUNNEL_JS_INTERCEPTOR = r"""<script data-tunnel-interceptor="1">(function(){
 var P="/__TUNNEL_CODE__";
-var _f=window.fetch;window.fetch=function(i,o){if(typeof i==="string"&&i.charAt(0)==="/")i=P+i;return _f.call(this,i,o)};
-var _xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){if(typeof u==="string"&&u.charAt(0)==="/")arguments[1]=P+u;return _xo.apply(this,arguments)};
-var _sa=Element.prototype.setAttribute;Element.prototype.setAttribute=function(n,v){if((n==="src"||n==="href"||n==="action")&&typeof v==="string"&&v.charAt(0)==="/"&&!v.startsWith(P+"/"))v=P+v;return _sa.call(this,n,v)};
-var _wo=window.open;window.open=function(u,t,f){if(typeof u==="string"&&u.charAt(0)==="/")u=P+u;return _wo.call(this,u,t,f)};
-var _ES=window.EventSource;if(_ES){window.EventSource=function(u,c){if(typeof u==="string"&&u.charAt(0)==="/")u=P+u;return new _ES(u,c)};window.EventSource.prototype=_ES.prototype}
-var _ps=history.pushState;history.pushState=function(s,t,u){if(typeof u==="string"&&u.charAt(0)==="/")arguments[2]=P+u;return _ps.apply(this,arguments)};
-var _rs=history.replaceState;history.replaceState=function(s,t,u){if(typeof u==="string"&&u.charAt(0)==="/")arguments[2]=P+u;return _rs.apply(this,arguments)};
+function _rp(u){if(typeof u!=="string")return u;if(u.charAt(0)==="/"&&!u.startsWith(P+"/"))return P+u;return u}
+var _f=window.fetch;window.fetch=function(i,o){if(typeof i==="string")i=_rp(i);else if(i&&typeof i==="object"&&typeof i.url==="string"){try{var n=new Request(_rp(i.url),i);i=n}catch(e){}}return _f.call(this,i,o)};
+var _xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){if(typeof u==="string")arguments[1]=_rp(u);var r=_xo.apply(this,arguments);if(typeof u==="string"&&_rp(u)!==u)try{this.setRequestHeader("X-Tunnel-Prefix",P)}catch(e){}return r};
+var _ES=window.EventSource;if(_ES){var _ESOrig=_ES;window.EventSource=function(u,c){if(typeof u==="string")u=_rp(u);return new _ESOrig(u,c)};window.EventSource.prototype=_ESOrig.prototype;window.EventSource.CONNECTING=_ESOrig.CONNECTING;window.EventSource.OPEN=_ESOrig.OPEN;window.EventSource.CLOSED=_ESOrig.CLOSED}
+var _ps=history.pushState;history.pushState=function(s,t,u){if(typeof u==="string")arguments[2]=_rp(u);return _ps.apply(this,arguments)};
+var _rs=history.replaceState;history.replaceState=function(s,t,u){if(typeof u==="string")arguments[2]=_rp(u);return _rs.apply(this,arguments)};
+var _wo=window.open;window.open=function(u,t,f){if(typeof u==="string")u=_rp(u);return _wo.call(this,u,t,f)};
+var _hd=Object.getOwnPropertyDescriptor(Location.prototype,"href");if(_hd){Object.defineProperty(Location.prototype,"href",{get:function(){return _hd.get.call(this)},set:function(v){_hd.set.call(this,_rp(v))},configurable:true})}
+var _la=Location.prototype.assign;Location.prototype.assign=function(u){return _la.call(this,_rp(u))};
+var _lr=Location.prototype.replace;Location.prototype.replace=function(u){return _lr.call(this,_rp(u))};
+var _ahd=Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,"href");if(_ahd){Object.defineProperty(HTMLAnchorElement.prototype,"href",{get:function(){return _ahd.get.call(this)},set:function(v){_ahd.set.call(this,_rp(v))},configurable:true})}
+var _ssd=Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype,"src");if(_ssd){Object.defineProperty(HTMLScriptElement.prototype,"src",{get:function(){return _ssd.get.call(this)},set:function(v){_ssd.set.call(this,_rp(v))},configurable:true})}
+var _lhd=Object.getOwnPropertyDescriptor(HTMLLinkElement.prototype,"href");if(_lhd){Object.defineProperty(HTMLLinkElement.prototype,"href",{get:function(){return _lhd.get.call(this)},set:function(v){_lhd.set.call(this,_rp(v))},configurable:true})}
+var _isd=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,"src");if(_isd){Object.defineProperty(HTMLImageElement.prototype,"src",{get:function(){return _isd.get.call(this)},set:function(v){_isd.set.call(this,_rp(v))},configurable:true})}
+document.addEventListener("click",function(e){var el=e.target;while(el&&el.tagName!=="A")el=el.parentElement;if(el&&el.tagName==="A"){var h=el.getAttribute("href");if(h&&h.charAt(0)==="/"&&!h.startsWith(P+"/"))try{el.setAttribute("href",P+h)}catch(ex){}}},true);
 var _A=["src","href","action"];var _ob=new MutationObserver(function(mu){for(var i=0;i<mu.length;i++){var an=mu[i].addedNodes;for(var j=0;j<an.length;j++){var nd=an[j];if(nd.nodeType!==1)continue;_A.forEach(function(a){var v=nd.getAttribute(a);if(v&&v.charAt(0)==="/"&&!v.startsWith(P+"/"))nd.setAttribute(a,P+v)});if(nd.querySelectorAll)_A.forEach(function(a){nd.querySelectorAll("["+a+'^="/"]').forEach(function(el){var v=el.getAttribute(a);if(v&&!v.startsWith(P+"/"))el.setAttribute(a,P+v)})})}}});_ob.observe(document.documentElement,{childList:true,subtree:true});
 })();</script>"""
 
@@ -227,35 +236,114 @@ var _A=["src","href","action"];var _ob=new MutationObserver(function(mu){for(var
 def _rewrite_html(body: bytes, prefix: str) -> bytes:
     """重写 HTML 响应体中的绝对路径，并注入 JS 拦截器。
 
-    1. 将 href="/..." src="/..." action="/..." 改为带前缀的路径
+    参考 IDE 项目 browser.py 的 _rewrite_html_urls 技术，适配隧道路径前缀模式。
+    1. 将各标签 href/src/action 的绝对路径改为带前缀的路径
     2. 将 CSS 中 url(/...) 改为 url(PREFIX/...)
-    3. 在 </head> 前注入 JS 拦截器脚本，运行时自动为
-       fetch / XHR / setAttribute / window.open / EventSource / history
-       等的绝对路径添加前缀
+    3. 重写 srcset 属性
+    4. 在 </head> 前注入 JS 拦截器脚本
     """
     try:
         text = body.decode("utf-8", errors="replace")
     except Exception:
         return body
 
-    # 1) HTML 属性: href="/..." src="/..." action="/..."
-    text = re.sub(r'(href\s*=\s*["\'])/', rf'\1{prefix}/', text)
-    text = re.sub(r'(src\s*=\s*["\'])/', rf'\1{prefix}/', text)
-    text = re.sub(r'(action\s*=\s*["\'])/', rf'\1{prefix}/', text)
+    # 1) HTML 属性: 按 IDE browser.py 的方式，对每种标签分别处理
+    #    避免过于宽泛的正则误匹配
+    tag_attrs = [
+        (r'(<link\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<script\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<img\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<a\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<iframe\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<form\s[^>]*?action\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<source\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<video\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<audio\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<embed\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<object\s[^>]*?data\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<input\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<area\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<button\s[^>]*?formaction\s*=\s*["\'])/', rf'\1{prefix}/'),
+        (r'(<track\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
+    ]
+    for pattern, replacement in tag_attrs:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
 
     # 2) CSS url(): url(/...) → url(PREFIX/...)
     text = re.sub(r'(url\(\s*["\']?\s*)/', rf'\1{prefix}/', text)
 
-    # 3) 注入 JS 拦截器 (在 </head> 之前，确保最先执行)
+    # 3) srcset 属性
+    def _rewrite_srcset(m):
+        attr_pfx = m.group(1)
+        srcset_val = m.group(2)
+        quote = m.group(3)
+        parts = srcset_val.split(',')
+        new_parts = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            tokens = part.split(None, 1)
+            url = tokens[0]
+            desc = tokens[1] if len(tokens) > 1 else ''
+            if url and url.startswith('/') and not url.startswith(prefix + '/'):
+                url = prefix + url
+            new_parts.append(url + (' ' + desc if desc else ''))
+        return attr_pfx + ', '.join(new_parts) + quote
+
+    text = re.sub(
+        r'((?:srcset|data-srcset)\s*=\s*["\'])([^"\']*)(["\'])',
+        _rewrite_srcset, text, flags=re.IGNORECASE
+    )
+
+    # 4) 注入 JS 拦截器 (在 </head> 之前，确保最先执行)
     js = _TUNNEL_JS_INTERCEPTOR.replace("__TUNNEL_CODE__", prefix.strip("/"))
     if "</head>" in text:
         text = text.replace("</head>", js + "\n</head>", 1)
     elif "</html>" in text:
-        # 没有 </head>? 尝试放在 </html> 前
         text = text.replace("</html>", js + "\n</html>", 1)
     else:
-        # 都没有? 追加到末尾
         text += js
+
+    return text.encode("utf-8", errors="replace")
+
+
+def _rewrite_css(body: bytes, prefix: str) -> bytes:
+    """重写 CSS 响应体中的 url() 绝对路径和 @import 绝对路径。"""
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return body
+
+    # url(/...) → url(PREFIX/...)
+    text = re.sub(r'(url\(\s*["\']?\s*)/', rf'\1{prefix}/', text)
+    # @import '/...' → @import 'PREFIX/...'
+    text = re.sub(r'(@import\s+["\'])/', rf'\1{prefix}/', text)
+
+    return text.encode("utf-8", errors="replace")
+
+
+def _rewrite_js(body: bytes, prefix: str) -> bytes:
+    """重写 JS 响应体中常见的绝对路径模式。
+
+    参考 IDE browser.py 的 _rewrite_js_urls 技术。
+    注意：JS 静态重写是有限的，主要靠注入的 JS 拦截器处理运行时路径。
+    """
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return body
+
+    # fetch('/...') → fetch('PREFIX/...')
+    text = re.sub(r"(fetch\s*\(\s*['\"])/", rf"\1{prefix}/", text)
+    # new URL('/...') → new URL('PREFIX/...')
+    text = re.sub(r"(new\s+URL\s*\(\s*['\"])/", rf"\1{prefix}/", text)
+    # location.href = '/...' → location.href = 'PREFIX/...'
+    text = re.sub(r"(location\.href\s*=\s*['\"])/", rf"\1{prefix}/", text)
+    text = re.sub(r"(location\.assign\s*\(\s*['\"])/", rf"\1{prefix}/", text)
+    text = re.sub(r"(location\.replace\s*\(\s*['\"])/", rf"\1{prefix}/", text)
+    # window.open('/...') → window.open('PREFIX/...')
+    text = re.sub(r"(window\.open\s*\(\s*['\"])/", rf"\1{prefix}/", text)
 
     return text.encode("utf-8", errors="replace")
 
@@ -643,20 +731,29 @@ class TunnelClient:
 
                 # ---- 路径重写 (仅在隧道编码存在时) ----
                 if prefix:
-                    ct = resp_headers.get("Content-Type", "")
+                    ct = resp_headers.get("Content-Type", "").lower()
                     status = resp.status
 
                     # 1) HTML 响应: 重写绝对路径 + 注入 JS 拦截器
                     if "text/html" in ct and resp_body:
                         resp_body = _rewrite_html(resp_body, prefix)
 
-                    # 2) 3xx 重定向: 重写 Location 头
-                    if status in (301, 302, 303, 307, 308):
-                        resp_headers = _rewrite_cookie_headers(resp_headers, prefix)
-                        resp_headers = _rewrite_redirect_headers(resp_headers, prefix)
+                    # 2) CSS 响应: 重写 url() 和 @import
+                    elif "text/css" in ct and resp_body:
+                        resp_body = _rewrite_css(resp_body, prefix)
 
-                    # 3) Set-Cookie: 重写 Path
-                    if "Set-Cookie" in resp_headers:
+                    # 3) JS 响应: 重写 fetch/location/window.open 等
+                    elif ("text/javascript" in ct or "application/javascript" in ct) and resp_body:
+                        resp_body = _rewrite_js(resp_body, prefix)
+
+                    # 4) 3xx 重定向: 重写 Location 头 + Set-Cookie Path
+                    if status in (301, 302, 303, 307, 308):
+                        resp_headers = _rewrite_redirect_headers(resp_headers, prefix)
+                        if "Set-Cookie" in resp_headers:
+                            resp_headers = _rewrite_cookie_headers(resp_headers, prefix)
+
+                    # 5) 非 3xx 的 Set-Cookie 也要重写 Path
+                    elif "Set-Cookie" in resp_headers:
                         resp_headers = _rewrite_cookie_headers(resp_headers, prefix)
 
                 payload = {

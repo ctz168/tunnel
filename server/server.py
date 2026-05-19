@@ -788,144 +788,6 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
-# ======================== 隧道路径重写（服务端） ========================
-
-# JS 拦截器：注入到 HTML 页面中，运行时自动为 fetch/XHR/DOM 绝对路径添加隧道路径前缀。
-# 参考 IDE 项目 browser.py 的 _inject_script_interceptor 技术，适配隧道路径前缀模式。
-_TUNNEL_JS_INTERCEPTOR = r"""<script data-tunnel-prefix="1">(function(){
-var P="/__TUNNEL_CODE__";
-function _rp(u){if(typeof u!=="string")return u;if(u.charAt(0)==="/"&&!u.startsWith(P+"/"))return P+u;return u}
-var _f=window.fetch;window.fetch=function(i,o){if(typeof i==="string")i=_rp(i);else if(i&&typeof i==="object"&&typeof i.url==="string"){try{var n=new Request(_rp(i.url),i);i=n}catch(e){}}return _f.call(this,i,o)};
-var _xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){if(typeof u==="string")arguments[1]=_rp(u);var r=_xo.apply(this,arguments);if(typeof u==="string"&&_rp(u)!==u)try{this.setRequestHeader("X-Tunnel-Prefix",P)}catch(e){}return r};
-var _ES=window.EventSource;if(_ES){var _ESOrig=_ES;window.EventSource=function(u,c){if(typeof u==="string")u=_rp(u);return new _ESOrig(u,c)};window.EventSource.prototype=_ESOrig.prototype;window.EventSource.CONNECTING=_ESOrig.CONNECTING;window.EventSource.OPEN=_ESOrig.OPEN;window.EventSource.CLOSED=_ESOrig.CLOSED}
-var _ps=history.pushState;history.pushState=function(s,t,u){if(typeof u==="string")arguments[2]=_rp(u);return _ps.apply(this,arguments)};
-var _rs=history.replaceState;history.replaceState=function(s,t,u){if(typeof u==="string")arguments[2]=_rp(u);return _rs.apply(this,arguments)};
-var _wo=window.open;window.open=function(u,t,f){if(typeof u==="string")u=_rp(u);return _wo.call(this,u,t,f)};
-var _hd=Object.getOwnPropertyDescriptor(Location.prototype,"href");if(_hd){Object.defineProperty(Location.prototype,"href",{get:function(){return _hd.get.call(this)},set:function(v){_hd.set.call(this,_rp(v))},configurable:true})}
-var _la=Location.prototype.assign;Location.prototype.assign=function(u){return _la.call(this,_rp(u))};
-var _lr=Location.prototype.replace;Location.prototype.replace=function(u){return _lr.call(this,_rp(u))};
-var _ahd=Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype,"href");if(_ahd){Object.defineProperty(HTMLAnchorElement.prototype,"href",{get:function(){return _ahd.get.call(this)},set:function(v){_ahd.set.call(this,_rp(v))},configurable:true})}
-var _ssd=Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype,"src");if(_ssd){Object.defineProperty(HTMLScriptElement.prototype,"src",{get:function(){return _ssd.get.call(this)},set:function(v){_ssd.set.call(this,_rp(v))},configurable:true})}
-var _lhd=Object.getOwnPropertyDescriptor(HTMLLinkElement.prototype,"href");if(_lhd){Object.defineProperty(HTMLLinkElement.prototype,"href",{get:function(){return _lhd.get.call(this)},set:function(v){_lhd.set.call(this,_rp(v))},configurable:true})}
-var _isd=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,"src");if(_isd){Object.defineProperty(HTMLImageElement.prototype,"src",{get:function(){return _isd.get.call(this)},set:function(v){_isd.set.call(this,_rp(v))},configurable:true})}
-document.addEventListener("click",function(e){var el=e.target;while(el&&el.tagName!=="A")el=el.parentElement;if(el&&el.tagName==="A"){var h=el.getAttribute("href");if(h&&h.charAt(0)==="/"&&!h.startsWith(P+"/"))try{el.setAttribute("href",P+h)}catch(ex){}}},true);
-})();</script>"""
-
-
-def _rewrite_html_body(body: bytes, prefix: str) -> bytes:
-    """重写 HTML 响应体中的绝对路径，并注入 JS 拦截器。
-
-    参考 IDE 项目 browser.py 的 _rewrite_html_urls 技术，适配隧道路径前缀模式。
-    1. 将 href="/..." src="/..." action="/..." 改为带前缀的路径
-    2. 将 CSS 中 url(/...) 改为 url(PREFIX/...)
-    3. 在 </head> 前注入 JS 拦截器脚本
-    """
-    try:
-        text = body.decode("utf-8", errors="replace")
-    except Exception:
-        return body
-
-    # 1) HTML 属性: href="/..." src="/..." action="/..."
-    #    参考 IDE browser.py 的 url_attrs 正则列表，覆盖更多标签
-    tag_attrs = [
-        (r'(<link\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<script\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<img\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<a\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<iframe\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<form\s[^>]*?action\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<source\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<video\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<audio\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<embed\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<object\s[^>]*?data\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<input\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<area\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<button\s[^>]*?formaction\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<track\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-    ]
-    for pattern, replacement in tag_attrs:
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-
-    # 2) CSS url(): url(/...) → url(PREFIX/...)
-    text = re.sub(r'(url\(\s*["\']?\s*)/', rf'\1{prefix}/', text)
-
-    # 3) srcset 属性（响应式图片）
-    def _rewrite_srcset(m):
-        attr_pfx = m.group(1)
-        srcset_val = m.group(2)
-        quote = m.group(3)
-        parts = srcset_val.split(',')
-        new_parts = []
-        for part in parts:
-            part = part.strip()
-            if not part:
-                continue
-            tokens = part.split(None, 1)
-            url = tokens[0]
-            desc = tokens[1] if len(tokens) > 1 else ''
-            if url and url.startswith('/') and not url.startswith(prefix + '/'):
-                url = prefix + url
-            new_parts.append(url + (' ' + desc if desc else ''))
-        return attr_pfx + ', '.join(new_parts) + quote
-
-    text = re.sub(
-        r'((?:srcset|data-srcset)\s*=\s*["\'])([^"\']*)(["\'])',
-        _rewrite_srcset, text, flags=re.IGNORECASE
-    )
-
-    # 4) 注入 JS 拦截器 (在 </head> 之前，确保最先执行)
-    js = _TUNNEL_JS_INTERCEPTOR.replace("__TUNNEL_CODE__", prefix.strip("/"))
-    if "</head>" in text:
-        text = text.replace("</head>", js + "\n</head>", 1)
-    elif "</html>" in text:
-        text = text.replace("</html>", js + "\n</html>", 1)
-    else:
-        text += js
-
-    return text.encode("utf-8", errors="replace")
-
-
-def _rewrite_css_body(body: bytes, prefix: str) -> bytes:
-    """重写 CSS 响应体中的 url() 绝对路径和 @import 绝对路径。"""
-    try:
-        text = body.decode("utf-8", errors="replace")
-    except Exception:
-        return body
-
-    # url(/...) → url(PREFIX/...)
-    text = re.sub(r'(url\(\s*["\']?\s*)/', rf'\1{prefix}/', text)
-    # @import '/...' → @import 'PREFIX/...'
-    text = re.sub(r'(@import\s+["\'])/', rf'\1{prefix}/', text)
-
-    return text.encode("utf-8", errors="replace")
-
-
-def _rewrite_js_body(body: bytes, prefix: str) -> bytes:
-    """重写 JS 响应体中常见的绝对路径模式。
-
-    参考 IDE browser.py 的 _rewrite_js_urls 技术。
-    注意：JS 重写是有限的，主要靠注入的 JS 拦截器处理运行时路径。
-    """
-    try:
-        text = body.decode("utf-8", errors="replace")
-    except Exception:
-        return body
-
-    # fetch('/...') → fetch('PREFIX/...')
-    text = re.sub(r"(fetch\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-    # new URL('/...') → new URL('PREFIX/...')
-    text = re.sub(r"(new\s+URL\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-    # location.href = '/...' → location.href = 'PREFIX/...'
-    text = re.sub(r"(location\.href\s*=\s*['\"])/", rf"\1{prefix}/", text)
-    text = re.sub(r"(location\.assign\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-    text = re.sub(r"(location\.replace\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-    # window.open('/...') → window.open('PREFIX/...')
-    text = re.sub(r"(window\.open\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-
-    return text.encode("utf-8", errors="replace")
-
-
 # ======================== HTTP 反向代理（核心隧道转发） ========================
 
 async def tunnel_request_handler(request: web.Request) -> web.Response:
@@ -1068,6 +930,7 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
         meta["request_count"] = meta.get("request_count", 0) + 1
 
         # 提取 Content-Type 并过滤不应透传的响应头
+        # 服务端做无脑转发，不修改响应体，路径重写由客户端完成
         content_type = "application/octet-stream"
         charset = None
         pass_headers: dict[str, str] = {}
@@ -1075,12 +938,10 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
             lower = key.lower()
             if lower == "content-type":
                 # aiohttp 要求 content_type 不含 charset，需拆分
-                # 例如 "text/html; charset=utf-8" → content_type="text/html", charset="utf-8"
                 ct_lower = value.lower()
                 if "charset=" in ct_lower:
                     parts = value.split(";", 1)
                     content_type = parts[0].strip()
-                    # 提取 charset 值
                     for param in parts[1].split(";"):
                         param = param.strip()
                         if param.lower().startswith("charset="):
@@ -1088,34 +949,8 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
                             break
                 else:
                     content_type = value
-            elif lower == "location":
-                # 3xx 重定向: 重写 Location 头中的绝对路径
-                if value.startswith("/"):
-                    pass_headers[key] = f"/{code}{value}"
-                else:
-                    pass_headers[key] = value
-            elif lower == "set-cookie":
-                # Set-Cookie: 重写 Path=/ 为 Path=/TUNNEL_CODE/
-                if "Path=/" in value and f"Path=/{code}/" not in value:
-                    pass_headers[key] = value.replace("Path=/", f"Path=/{code}/")
-                else:
-                    pass_headers[key] = value
             elif lower not in ("transfer-encoding", "connection", "keep-alive", "content-length"):
                 pass_headers[key] = value
-
-        # ---- 服务端路径重写 ----
-        # 在服务端对响应体做路径前缀重写，不依赖客户端更新。
-        # 参考 IDE 项目 browser.py 代理技术，适配隧道路径前缀模式。
-        prefix = f"/{code}"
-        ct_lower = content_type.lower()
-
-        if resp_body:
-            if "text/html" in ct_lower:
-                resp_body = _rewrite_html_body(resp_body, prefix)
-            elif "text/css" in ct_lower:
-                resp_body = _rewrite_css_body(resp_body, prefix)
-            elif "text/javascript" in ct_lower or "application/javascript" in ct_lower:
-                resp_body = _rewrite_js_body(resp_body, prefix)
 
         return web.Response(
             status=status_code,
