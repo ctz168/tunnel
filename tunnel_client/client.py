@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import base64
 import json
+import re
 import signal
 import socket
 import sys
@@ -205,6 +206,77 @@ def upnp_close(port):
     )
 
 
+# ======================== 隧道路径重写 (核心修复) ========================
+
+# JS 拦截器：注入到 HTML 页面中，在运行时为所有 fetch/XHR/DOM 绝对路径
+# 自动添加隧道路径前缀，这样被代理的 Web 应用无需任何修改即可在
+# http://tunnel-server/TUNNEL_CODE/ 下正常工作。
+_TUNNEL_JS_INTERCEPTOR = r"""<script data-tunnel-interceptor="1">(function(){
+var P="/__TUNNEL_CODE__";
+var _f=window.fetch;window.fetch=function(i,o){if(typeof i==="string"&&i.charAt(0)==="/")i=P+i;return _f.call(this,i,o)};
+var _xo=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){if(typeof u==="string"&&u.charAt(0)==="/")arguments[1]=P+u;return _xo.apply(this,arguments)};
+var _sa=Element.prototype.setAttribute;Element.prototype.setAttribute=function(n,v){if((n==="src"||n==="href"||n==="action")&&typeof v==="string"&&v.charAt(0)==="/"&&!v.startsWith(P+"/"))v=P+v;return _sa.call(this,n,v)};
+var _wo=window.open;window.open=function(u,t,f){if(typeof u==="string"&&u.charAt(0)==="/")u=P+u;return _wo.call(this,u,t,f)};
+var _ES=window.EventSource;if(_ES){window.EventSource=function(u,c){if(typeof u==="string"&&u.charAt(0)==="/")u=P+u;return new _ES(u,c)};window.EventSource.prototype=_ES.prototype}
+var _ps=history.pushState;history.pushState=function(s,t,u){if(typeof u==="string"&&u.charAt(0)==="/")arguments[2]=P+u;return _ps.apply(this,arguments)};
+var _rs=history.replaceState;history.replaceState=function(s,t,u){if(typeof u==="string"&&u.charAt(0)==="/")arguments[2]=P+u;return _rs.apply(this,arguments)};
+var _A=["src","href","action"];var _ob=new MutationObserver(function(mu){for(var i=0;i<mu.length;i++){var an=mu[i].addedNodes;for(var j=0;j<an.length;j++){var nd=an[j];if(nd.nodeType!==1)continue;_A.forEach(function(a){var v=nd.getAttribute(a);if(v&&v.charAt(0)==="/"&&!v.startsWith(P+"/"))nd.setAttribute(a,P+v)});if(nd.querySelectorAll)_A.forEach(function(a){nd.querySelectorAll("["+a+'^="/"]').forEach(function(el){var v=el.getAttribute(a);if(v&&!v.startsWith(P+"/"))el.setAttribute(a,P+v)})})}}});_ob.observe(document.documentElement,{childList:true,subtree:true});
+})();</script>"""
+
+
+def _rewrite_html(body: bytes, prefix: str) -> bytes:
+    """重写 HTML 响应体中的绝对路径，并注入 JS 拦截器。
+
+    1. 将 href="/..." src="/..." action="/..." 改为带前缀的路径
+    2. 将 CSS 中 url(/...) 改为 url(PREFIX/...)
+    3. 在 </head> 前注入 JS 拦截器脚本，运行时自动为
+       fetch / XHR / setAttribute / window.open / EventSource / history
+       等的绝对路径添加前缀
+    """
+    try:
+        text = body.decode("utf-8", errors="replace")
+    except Exception:
+        return body
+
+    # 1) HTML 属性: href="/..." src="/..." action="/..."
+    text = re.sub(r'(href\s*=\s*["\'])/', rf'\1{prefix}/', text)
+    text = re.sub(r'(src\s*=\s*["\'])/', rf'\1{prefix}/', text)
+    text = re.sub(r'(action\s*=\s*["\'])/', rf'\1{prefix}/', text)
+
+    # 2) CSS url(): url(/...) → url(PREFIX/...)
+    text = re.sub(r'(url\(\s*["\']?\s*)/', rf'\1{prefix}/', text)
+
+    # 3) 注入 JS 拦截器 (在 </head> 之前，确保最先执行)
+    js = _TUNNEL_JS_INTERCEPTOR.replace("__TUNNEL_CODE__", prefix.strip("/"))
+    if "</head>" in text:
+        text = text.replace("</head>", js + "\n</head>", 1)
+    elif "</html>" in text:
+        # 没有 </head>? 尝试放在 </html> 前
+        text = text.replace("</html>", js + "\n</html>", 1)
+    else:
+        # 都没有? 追加到末尾
+        text += js
+
+    return text.encode("utf-8", errors="replace")
+
+
+def _rewrite_redirect_headers(headers: dict, prefix: str) -> dict:
+    """重写 3xx 重定向的 Location 头，添加隧道前缀。"""
+    location = headers.get("Location", "")
+    if location.startswith("/"):
+        headers["Location"] = prefix + location
+    return headers
+
+
+def _rewrite_cookie_headers(headers: dict, prefix: str) -> dict:
+    """重写 Set-Cookie 的 Path，将 Path=/ 改为 Path=PREFIX/，
+    防止 cookie 泄漏到同域名下的其他隧道。"""
+    cookie = headers.get("Set-Cookie", "")
+    if cookie and "Path=/" in cookie:
+        headers["Set-Cookie"] = cookie.replace("Path=/", f"Path={prefix}/")
+    return headers
+
+
 # ======================== P2P HTTP 反向代理 ========================
 
 class P2PProxy:
@@ -214,11 +286,13 @@ class P2PProxy:
     """
 
     def __init__(self, listen_host: str, listen_port: int,
-                 target_host: str, target_port: int):
+                 target_host: str, target_port: int,
+                 tunnel_code: str = ""):
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.target_host = target_host
         self.target_port = target_port
+        self.tunnel_code = tunnel_code
         self.runner: web.AppRunner | None = None
         self.session: aiohttp.ClientSession | None = None
 
@@ -259,6 +333,7 @@ class P2PProxy:
                     for k, v in resp.headers.items()
                     if k.lower() not in ("transfer-encoding", "connection", "content-length")
                 }
+                # P2P 直连模式不需要路径重写（浏览器直接访问 IP:PORT，无前缀）
                 return web.Response(status=resp.status, body=resp_body, headers=pass_headers)
         except Exception as e:
             return web.Response(status=502, text=f"P2P proxy error: {e}")
@@ -291,7 +366,7 @@ class TunnelClient:
         self._upnp_opened = False
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.2 (IPv6/IPv4 P2P + Relay + Stable)")
+        print(f"\n  Tunnel Client v2.3 (IPv6/IPv4 P2P + Relay + Path-Rewrite)")
         print(f"  服务器:   {self.server}")
         print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:     {self.local_host}:{self.local_port}")
@@ -404,6 +479,7 @@ class TunnelClient:
                     self._p2p_proxy = P2PProxy(
                         "::", self.p2p_port,
                         self.local_host, self.local_port,
+                        self._tunnel_code,
                     )
                     await self._p2p_proxy.start()
                     ipv6_url = f"http://[{ipv6_addr}]:{self.p2p_port}"
@@ -436,6 +512,7 @@ class TunnelClient:
                         self._p2p_proxy = P2PProxy(
                             "0.0.0.0", self.p2p_port,
                             self.local_host, self.local_port,
+                            self._tunnel_code,
                         )
                         await self._p2p_proxy.start()
                     ipv4_url = f"http://{self._public_ip}:{self.p2p_port}"
@@ -527,7 +604,18 @@ class TunnelClient:
                 pass
 
     async def _proxy_request(self, data: dict):
-        """中继模式：通过 WebSocket 转发 HTTP 请求"""
+        """中继模式：通过 WebSocket 转发 HTTP 请求，并重写响应中的绝对路径。
+
+        当通过 http://tunnel-server/TUNNEL_CODE/ 访问时，浏览器会把
+        HTML 中的绝对路径 /api/... /css/... 解析为
+        http://tunnel-server/api/...（丢失 /TUNNEL_CODE/ 前缀），
+        导致所有资源请求 404。
+
+        修复方式（完全不修改被代理的应用）：
+        1. HTML 响应 → 正则替换 href/src/action 的绝对路径 + 注入 JS 拦截器
+        2. 3xx 重定向 → 重写 Location 头
+        3. Set-Cookie → 重写 Path=/
+        """
         req_id = data["id"]
         method = data["method"]
         url_path = data["url"]
@@ -540,6 +628,7 @@ class TunnelClient:
         body = base64.b64decode(body_b64) if body_b64 else None
 
         target = f"http://{self.local_host}:{self.local_port}{url_path}"
+        prefix = f"/{self._tunnel_code}" if self._tunnel_code else ""
 
         try:
             # 使用更长的超时（600秒），匹配服务端超时
@@ -551,6 +640,25 @@ class TunnelClient:
                     for k, v in resp.headers.items()
                     if k.lower() not in ("transfer-encoding", "connection")
                 }
+
+                # ---- 路径重写 (仅在隧道编码存在时) ----
+                if prefix:
+                    ct = resp_headers.get("Content-Type", "")
+                    status = resp.status
+
+                    # 1) HTML 响应: 重写绝对路径 + 注入 JS 拦截器
+                    if "text/html" in ct and resp_body:
+                        resp_body = _rewrite_html(resp_body, prefix)
+
+                    # 2) 3xx 重定向: 重写 Location 头
+                    if status in (301, 302, 303, 307, 308):
+                        resp_headers = _rewrite_cookie_headers(resp_headers, prefix)
+                        resp_headers = _rewrite_redirect_headers(resp_headers, prefix)
+
+                    # 3) Set-Cookie: 重写 Path
+                    if "Set-Cookie" in resp_headers:
+                        resp_headers = _rewrite_cookie_headers(resp_headers, prefix)
+
                 payload = {
                     "type": "response",
                     "id": req_id,
@@ -601,7 +709,7 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.2 (IPv6/IPv4 P2P + Relay + Stable)",
+        description="Tunnel Client v2.3 (IPv6/IPv4 P2P + Relay + Path-Rewrite)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
