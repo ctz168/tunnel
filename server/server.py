@@ -931,11 +931,25 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
 
         # 提取 Content-Type 并过滤不应透传的响应头
         content_type = "application/octet-stream"
+        charset = None
         pass_headers: dict[str, str] = {}
         for key, value in resp_headers.items():
             lower = key.lower()
             if lower == "content-type":
-                content_type = value
+                # aiohttp 要求 content_type 不含 charset，需拆分
+                # 例如 "text/html; charset=utf-8" → content_type="text/html", charset="utf-8"
+                ct_lower = value.lower()
+                if "charset=" in ct_lower:
+                    parts = value.split(";", 1)
+                    content_type = parts[0].strip()
+                    # 提取 charset 值
+                    for param in parts[1].split(";"):
+                        param = param.strip()
+                        if param.lower().startswith("charset="):
+                            charset = param.split("=", 1)[1].strip().strip('"')
+                            break
+                else:
+                    content_type = value
             elif lower not in ("transfer-encoding", "connection", "keep-alive", "content-length"):
                 pass_headers[key] = value
 
@@ -943,6 +957,7 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
             status=status_code,
             body=resp_body,
             content_type=content_type,
+            charset=charset,
             headers=pass_headers if pass_headers else None,
         )
 
