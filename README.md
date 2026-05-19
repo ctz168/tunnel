@@ -133,6 +133,98 @@ export TCP_PORT_END=7899
 
 ---
 
+## 纯 Ubuntu SSH 隧道部署指南
+
+在标准 Ubuntu 系统（物理机、VM、云服务器）上通过隧道将 SSH 暴露到公网的完整步骤。
+
+### 1. 安装并配置 SSH 服务
+
+大多数 Ubuntu 已预装 openssh-server，如未安装：
+
+```bash
+# 安装 SSH 服务器
+sudo apt update && sudo apt install openssh-server -y
+
+# 确认 SSH 已启动（默认端口 22）
+sudo systemctl start ssh
+sudo systemctl enable ssh   # 开机自启
+```
+
+### 2. 配置允许 root 密码登录（可选）
+
+如果需要 root 直接登录：
+
+```bash
+# 允许 root 密码登录
+sudo sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sudo sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+
+# 确保密码认证开启
+sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+# 重启 SSH 使配置生效
+sudo systemctl restart ssh
+
+# 设置 root 密码（如果还没有）
+sudo passwd root
+```
+
+> 如果只需普通用户登录，可跳过此步，直接用普通用户 SSH 连接即可。
+
+### 3. 安装隧道客户端
+
+```bash
+# 安装 Python 和 pip（如果还没有）
+sudo apt install python3 python3-pip -y
+
+# 安装隧道客户端（v2.5.1+）
+pip install tunnel-p2p-client --break-system-packages
+```
+
+### 4. 启动隧道（带 TCP 转发）
+
+```bash
+tunnel-p2p-client --key YOUR_TOKEN --port 8080 --tcp-ports 22
+```
+
+启动成功后会显示：
+
+```
+Tunnel Client v2.5.1 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)
+[OK] 隧道已建立
+[OK] 隧道编码: XXXXXXXX
+[TCP] tcp-22 -> localhost:22 (公网端口: 7800)
+```
+
+### 5. 从外部 SSH 连接
+
+```bash
+ssh -p 7800 root@aicq.online
+# 或用普通用户
+ssh -p 7800 youruser@aicq.online
+```
+
+### 常见问题
+
+**Q: SSH 服务未运行**
+A: 检查并启动：
+```bash
+sudo systemctl status ssh
+sudo systemctl start ssh
+```
+
+**Q: 防火墙阻止了本地 SSH**
+A: 放行 22 端口：
+```bash
+sudo ufw allow 22
+```
+
+**Q: 隧道 TCP 转发显示端口但连不上**
+A: 确保服务端防火墙开放了 7800-7899 端口范围，且服务端已更新到支持 TCP 转发的版本。
+
+---
+
 ## Termux + Ubuntu SSH 隧道部署指南
 
 在安卓手机上通过 Termux 运行 Ubuntu（proot-distro），并通过隧道将 SSH 暴露到公网的完整步骤。
