@@ -654,7 +654,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     pong_received = asyncio.Event()
 
     async def heartbeat_loop():
-        """每 30 秒发送 ping，30 秒内未收到 pong 则关闭连接"""
+        """每 30 秒发送 ping，60 秒内未收到 pong 则关闭连接"""
         while not ws.closed:
             await asyncio.sleep(30)
             if ws.closed:
@@ -664,12 +664,12 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                 await ws.send_json({"type": "ping"})
             except Exception:
                 break
-            # 等待 30 秒内收到 pong（长任务场景需更宽容）
+            # 等待 60 秒内收到 pong（长任务场景需更宽容）
             try:
-                await asyncio.wait_for(pong_received.wait(), timeout=30)
+                await asyncio.wait_for(pong_received.wait(), timeout=60)
             except asyncio.TimeoutError:
                 # 心跳超时，关闭连接
-                print(f"[Tunnel] 隧道 {code} 心跳超时（30s），断开连接")
+                print(f"[Tunnel] 隧道 {code} 心跳超时（60s），断开连接")
                 try:
                     await ws.close(code=4008, message=b"Heartbeat timeout")
                 except Exception:

@@ -454,7 +454,7 @@ class TunnelClient:
         self._upnp_opened = False
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.3 (IPv6/IPv4 P2P + Relay + Path-Rewrite)")
+        print(f"\n  Tunnel Client v2.4 (IPv6/IPv4 P2P + Relay + Path-Rewrite)")
         print(f"  服务器:   {self.server}")
         print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:     {self.local_host}:{self.local_port}")
@@ -806,7 +806,7 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.3 (IPv6/IPv4 P2P + Relay + Path-Rewrite)",
+        description="Tunnel Client v2.4 (IPv6/IPv4 P2P + Relay + Path-Rewrite)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
