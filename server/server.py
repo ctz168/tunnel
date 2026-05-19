@@ -105,6 +105,10 @@ tcp_listeners: dict[int, asyncio.Server] = {}
 # 活跃 TCP 流: code -> {stream_id -> (reader, writer)}
 tcp_streams: dict[str, dict[str, tuple[asyncio.StreamReader, asyncio.StreamWriter]]] = {}
 
+# TCP 流就绪事件: code -> {stream_id -> asyncio.Event}
+# 服务端发送 tcp_open 后等待客户端回复 tcp_opened，确保本地连接已建立
+tcp_ready_events: dict[str, dict[str, asyncio.Event]] = {}
+
 # TCP 服务注册: code -> [{"local_port": 22, "public_port": 7801, "name": "ssh"}]
 tcp_services: dict[str, list[dict]] = {}
 
@@ -210,6 +214,12 @@ async def _start_tcp_listener(code: str, public_port: int, local_port: int):
             tcp_streams.get(code, {}).pop(stream_id, None)
             return
 
+        # 创建就绪事件，等待客户端确认本地连接已建立
+        ready_event = asyncio.Event()
+        if code not in tcp_ready_events:
+            tcp_ready_events[code] = {}
+        tcp_ready_events[code][stream_id] = ready_event
+
         try:
             await ws.send_json({
                 "type": "tcp_open",
@@ -220,7 +230,21 @@ async def _start_tcp_listener(code: str, public_port: int, local_port: int):
             writer.close()
             await writer.wait_closed()
             tcp_streams.get(code, {}).pop(stream_id, None)
+            tcp_ready_events.get(code, {}).pop(stream_id, None)
             return
+
+        # 等待客户端确认本地连接已建立（最多 10 秒）
+        try:
+            await asyncio.wait_for(ready_event.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            logger.warning(f"TCP 流 {stream_id} 等待客户端就绪超时")
+            writer.close()
+            await writer.wait_closed()
+            tcp_streams.get(code, {}).pop(stream_id, None)
+            tcp_ready_events.get(code, {}).pop(stream_id, None)
+            return
+        finally:
+            tcp_ready_events.get(code, {}).pop(stream_id, None)
 
         # 从外部连接读取数据，通过 WebSocket 二进制帧转发到客户端
         try:
@@ -275,6 +299,11 @@ async def _stop_tcp_listener(public_port: int):
 
 async def _cleanup_tcp_for_tunnel(code: str):
     """清理指定隧道的所有 TCP 资源（关闭流 + 停止监听器 + 释放端口）"""
+    # 清理就绪事件
+    events = tcp_ready_events.pop(code, {})
+    for stream_id, event in events.items():
+        event.set()  # 唤醒可能正在等待的连接
+
     # 关闭所有活跃的 TCP 流
     streams = tcp_streams.pop(code, {})
     for stream_id, (reader, writer) in streams.items():
@@ -949,6 +978,14 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                         "services": allocated,
                     })
                     logger.info(f"隧道 {code} TCP 服务已注册: {allocated}")
+
+                elif msg_type == "tcp_opened":
+                    # 客户端确认本地 TCP 连接已建立，通知服务端开始转发数据
+                    stream_id = data.get("stream_id", "")
+                    events = tcp_ready_events.get(code, {})
+                    event = events.get(stream_id)
+                    if event:
+                        event.set()
 
                 elif msg_type == "tcp_close":
                     # 客户端关闭了一个 TCP 流（本地端断开）

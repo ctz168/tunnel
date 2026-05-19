@@ -460,7 +460,7 @@ class TunnelClient:
         self._tcp_services: list[dict] = []
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.5 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)")
+        print(f"\n  Tunnel Client v2.5.1 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)")
         print(f"  服务器:   {self.server}")
         print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:     {self.local_host}:{self.local_port}")
@@ -576,7 +576,8 @@ class TunnelClient:
 
         elif t == "tcp_open":
             # 服务端通知：有新的外部 TCP 连接，需要连接本地端口
-            asyncio.create_task(self._handle_tcp_open(data))
+            # 同步等待本地连接建立，避免竞态条件导致数据丢失
+            await self._handle_tcp_open(data)
 
         elif t == "tcp_close":
             # 服务端通知：外部 TCP 连接已断开，关闭本地连接
@@ -851,6 +852,16 @@ class TunnelClient:
             "task": task,
         }
 
+        # 通知服务端本地连接已就绪，可以开始转发数据
+        try:
+            if self.ws and not self.ws.closed:
+                await self.ws.send_json({
+                    "type": "tcp_opened",
+                    "stream_id": stream_id,
+                })
+        except Exception:
+            pass
+
     async def _tcp_local_relay(self, stream_id: str, reader: asyncio.StreamReader,
                                 writer: asyncio.StreamWriter):
         """从本地 TCP 连接读取数据，通过 WebSocket 二进制帧发送到服务端
@@ -976,7 +987,7 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.5 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)",
+        description="Tunnel Client v2.5.1 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
