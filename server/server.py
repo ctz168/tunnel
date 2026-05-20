@@ -115,6 +115,24 @@ tcp_services: dict[str, list[dict]] = {}
 # 下一个可用的 TCP 端口
 _next_tcp_port: int = TCP_PORT_START
 
+# ======================== HTTP 独立端口模式 ========================
+# HTTP 端口范围，用于给每个隧道分配独立的 HTTP 端口（类似 TCP 转发模式）
+# 访问 domain:http_port/path 即可直接访问本地服务，无需路径前缀重写
+HTTP_PORT_START = int(os.environ.get("HTTP_PORT_START", "7900"))
+HTTP_PORT_END = int(os.environ.get("HTTP_PORT_END", "7999"))
+
+# 已分配的 HTTP 端口: port -> tunnel_code
+http_port_map: dict[int, str] = {}
+
+# HTTP 监听器: port -> web.AppRunner
+http_listeners: dict[int, web.AppRunner] = {}
+
+# HTTP 端口服务注册: code -> {"public_port": 7900, "local_port": 8080}
+http_port_services: dict[str, dict] = {}
+
+# 下一个可用的 HTTP 端口
+_next_http_port: int = HTTP_PORT_START
+
 
 # ======================== 工具函数 ========================
 
@@ -381,6 +399,188 @@ async def _handle_tcp_binary(code: str, data: bytes):
         streams.pop(stream_id, None)
 
 
+# ======================== HTTP 独立端口模式辅助函数 ========================
+
+def _allocate_http_port(code: str, preferred_port: int | None = None) -> int | None:
+    """从 HTTP 端口范围中分配一个端口给指定隧道（逻辑同 TCP 端口分配）"""
+    global _next_http_port
+
+    if preferred_port is not None and HTTP_PORT_START <= preferred_port <= HTTP_PORT_END:
+        existing = http_port_map.get(preferred_port)
+        if existing is None or existing == code:
+            http_port_map[preferred_port] = code
+            _next_http_port = preferred_port + 1
+            if _next_http_port > HTTP_PORT_END:
+                _next_http_port = HTTP_PORT_START
+            return preferred_port
+
+    for offset in range(HTTP_PORT_END - HTTP_PORT_START + 1):
+        port = HTTP_PORT_START + ((_next_http_port - HTTP_PORT_START + offset) % (HTTP_PORT_END - HTTP_PORT_START + 1))
+        existing = http_port_map.get(port)
+        if existing is None or existing == code:
+            http_port_map[port] = code
+            _next_http_port = port + 1
+            if _next_http_port > HTTP_PORT_END:
+                _next_http_port = HTTP_PORT_START
+            return port
+    return None
+
+
+async def _start_http_port_listener(code: str, public_port: int, local_port: int):
+    """启动 HTTP 独立端口监听器
+
+    在 public_port 上启动一个轻量 aiohttp 应用，将所有 HTTP 请求
+    通过 WebSocket 转发给隧道客户端处理。
+
+    与主端口的路径前缀模式不同，独立端口模式下：
+    - 请求路径直接透传（无 /TUNNEL_CODE/ 前缀）
+    - 不需要客户端做任何路径重写
+    - 客户端收到的 url 就是原始路径，如 /api/status, /ui/chat/chat.css
+    """
+    async def _http_port_handler(request: web.Request) -> web.Response:
+        """独立端口的 HTTP 请求处理器"""
+        ws = active_tunnels.get(code)
+        if not ws or ws.closed:
+            return web.json_response(
+                {"error": "Tunnel offline", "message": f"隧道 {code} 当前不在线"},
+                status=502,
+            )
+
+        # 构造请求路径（含 query string）
+        url_path = request.path
+        if request.query_string:
+            url_path = f"{url_path}?{request.query_string}"
+
+        # 生成唯一请求 ID
+        req_id = f"{code}-hp-{uuid.uuid4().hex[:12]}"
+
+        # 创建 Future 等待客户端响应
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        pending_requests[req_id] = future
+
+        try:
+            # 读取请求体
+            body = await request.read()
+            body_b64 = base64.b64encode(body).decode("utf-8") if body else ""
+
+            # 收集请求头
+            headers = {}
+            for key, value in request.headers.items():
+                if key.lower() not in _HOP_BY_HOP:
+                    headers[key] = value
+
+            # 通过 WebSocket 发送给客户端
+            await ws.send_json({
+                "type": "request",
+                "id": req_id,
+                "method": request.method,
+                "url": url_path,
+                "headers": headers,
+                "body": body_b64,
+            })
+
+            # 等待响应
+            try:
+                resp_data = await asyncio.wait_for(future, timeout=600)
+            except asyncio.TimeoutError:
+                return web.json_response(
+                    {"error": "Gateway Timeout", "message": "隧道客户端响应超时 (600s)"},
+                    status=504,
+                )
+
+            # 解析响应
+            status_code = resp_data.get("status_code", 200)
+            resp_headers = resp_data.get("headers", {})
+            resp_body_b64 = resp_data.get("body", "")
+            resp_body = base64.b64decode(resp_body_b64) if resp_body_b64 else b""
+
+            # 更新统计
+            meta = tunnel_meta.get(code, {})
+            meta["bytes_in"] = meta.get("bytes_in", 0) + len(body)
+            meta["bytes_out"] = meta.get("bytes_out", 0) + len(resp_body)
+            meta["request_count"] = meta.get("request_count", 0) + 1
+
+            # 提取 Content-Type 并过滤响应头
+            content_type = "application/octet-stream"
+            charset = None
+            pass_headers: dict[str, str] = {}
+            for key, value in resp_headers.items():
+                lower = key.lower()
+                if lower == "content-type":
+                    ct_lower = value.lower()
+                    if "charset=" in ct_lower:
+                        parts = value.split(";", 1)
+                        content_type = parts[0].strip()
+                        for param in parts[1].split(";"):
+                            param = param.strip()
+                            if param.lower().startswith("charset="):
+                                charset = param.split("=", 1)[1].strip().strip('"')
+                                break
+                    else:
+                        content_type = value
+                elif lower not in ("transfer-encoding", "connection", "keep-alive", "content-length"):
+                    pass_headers[key] = value
+
+            return web.Response(
+                status=status_code,
+                body=resp_body,
+                content_type=content_type,
+                charset=charset,
+                headers=pass_headers if pass_headers else None,
+            )
+
+        except asyncio.CancelledError:
+            return web.json_response({"error": "Request cancelled"}, status=499)
+        except Exception as e:
+            logger.exception(f"HTTP 端口转发异常 [{code}]")
+            return web.json_response(
+                {"error": "Internal Server Error", "message": str(e)},
+                status=500,
+            )
+        finally:
+            pending_requests.pop(req_id, None)
+
+    # 创建独立的 aiohttp 应用
+    app = web.Application(middlewares=[error_middleware])
+    # 用一个 catch-all handler 处理所有路径
+    app.router.add_route("*", "/{path_info:.*}", _http_port_handler)
+    # 根路径需要单独注册（aiohttp 的路由匹配规则）
+    app.router.add_route("*", "/", _http_port_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    try:
+        site = web.TCPSite(runner, "0.0.0.0", public_port)
+        await site.start()
+        http_listeners[public_port] = runner
+        logger.info(f"HTTP 独立端口监听器已启动: 端口 {public_port} -> 隧道 {code} (本地端口 {local_port})")
+    except OSError as e:
+        logger.error(f"HTTP 独立端口监听器启动失败: 端口 {public_port}: {e}")
+        http_port_map.pop(public_port, None)
+        await runner.cleanup()
+
+
+async def _stop_http_port_listener(public_port: int, release_port: bool = True):
+    """停止指定端口的 HTTP 监听器"""
+    runner = http_listeners.pop(public_port, None)
+    if runner:
+        await runner.cleanup()
+        logger.info(f"HTTP 独立端口监听器已停止: 端口 {public_port}")
+    if release_port:
+        http_port_map.pop(public_port, None)
+
+
+async def _cleanup_http_port_for_tunnel(code: str):
+    """清理指定隧道的 HTTP 端口资源"""
+    svc = http_port_services.pop(code, None)
+    if svc:
+        port = svc.get("public_port")
+        if port:
+            await _stop_http_port_listener(port, release_port=False)
+
+
 # 默认说明页 HTML（当路径不匹配隧道编码时展示）
 _DEFAULT_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -425,7 +625,7 @@ _DEFAULT_HTML = """<!DOCTYPE html>
 
 async def on_startup(app: web.Application):
     """服务启动时初始化数据库、打印横幅"""
-    global _db, _next_tcp_port
+    global _db, _next_tcp_port, _next_http_port
 
     # 初始化数据库表结构
     await tunnel_db.init_db()
@@ -441,14 +641,26 @@ async def on_startup(app: web.Application):
         tcp_port_map[port] = t_code
         logger.info(f"TCP 端口恢复: {port} -> 隧道 {t_code}")
     if tcp_port_map:
-        # 更新 _next_tcp_port 到已分配的最大端口之后
         max_port = max(tcp_port_map.keys())
         _next_tcp_port = max_port + 1 if max_port < TCP_PORT_END else TCP_PORT_START
         logger.info(f"已恢复 {len(tcp_port_map)} 个 TCP 端口映射，下一个可用端口: {_next_tcp_port}")
 
+    # 从数据库加载已持久化的 HTTP 端口映射
+    cursor = await _db.execute("SELECT tunnel_code, public_port FROM tunnel_http_port")
+    rows = await cursor.fetchall()
+    for row in rows:
+        t_code, port = row[0], row[1]
+        http_port_map[port] = t_code
+        logger.info(f"HTTP 端口恢复: {port} -> 隧道 {t_code}")
+    if http_port_map:
+        max_port = max(http_port_map.keys())
+        _next_http_port = max_port + 1 if max_port < HTTP_PORT_END else HTTP_PORT_START
+        logger.info(f"已恢复 {len(http_port_map)} 个 HTTP 端口映射，下一个可用端口: {_next_http_port}")
+
     # 打印启动横幅
     domain = await _get_server_domain()
     tcp_info = f"{TCP_PORT_START}-{TCP_PORT_END}" if TCP_PORT_START else "禁用"
+    http_info = f"{HTTP_PORT_START}-{HTTP_PORT_END}" if HTTP_PORT_START else "禁用"
     banner = f"""
 ╔══════════════════════════════════════════════════╗
 ║              Tunnel Server 已启动              ║
@@ -457,6 +669,7 @@ async def on_startup(app: web.Application):
 ║  端口  : {SERVER_PORT:<38d}║
 ║  地址  : http://0.0.0.0:{SERVER_PORT:<27d}║
 ║  TCP   : {tcp_info:<38s}║
+║  HTTP  : {http_info:<38s}║
 ╚══════════════════════════════════════════════════╝"""
     logger.info(f"域名: {domain}  端口: {SERVER_PORT}")
     logger.info(f"地址: http://0.0.0.0:{SERVER_PORT}")
@@ -502,6 +715,10 @@ async def on_cleanup(app: web.Application):
     # 关闭所有 TCP 监听器和流
     for code in list(tcp_services.keys()):
         await _cleanup_tcp_for_tunnel(code)
+
+    # 关闭所有 HTTP 独立端口监听器
+    for code in list(http_port_services.keys()):
+        await _cleanup_http_port_for_tunnel(code)
 
     # 取消所有待处理请求
     for req_id, future in list(pending_requests.items()):
@@ -1002,6 +1219,52 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                     if future and not future.done():
                         future.set_result(data)
 
+                elif msg_type == "http_port_register":
+                    # 客户端请求分配 HTTP 独立端口
+                    # 请求格式: {"type": "http_port_register", "local_port": 8080}
+                    lp = data.get("local_port")
+                    if not lp:
+                        continue
+                    lp_int = int(lp)
+
+                    # 从数据库加载之前持久化的端口映射
+                    persisted = await tunnel_db.get_http_port(db, code)
+                    preferred = persisted.get("public_port") if persisted else None
+
+                    public_port = _allocate_http_port(code, preferred_port=preferred)
+                    if public_port is None:
+                        logger.warning(f"隧道 {code} HTTP 端口分配失败: 无可用端口")
+                        await ws.send_json({
+                            "type": "http_port_registered",
+                            "error": "无可用端口",
+                        })
+                        continue
+
+                    # 启动 HTTP 监听器
+                    await _start_http_port_listener(code, public_port, lp_int)
+
+                    # 保存映射
+                    http_port_services[code] = {
+                        "local_port": lp_int,
+                        "public_port": public_port,
+                    }
+
+                    # 持久化到数据库
+                    await tunnel_db.save_http_port(db, code, lp_int, public_port)
+
+                    # 通知客户端
+                    domain = await _get_server_domain()
+                    # 从 domain 中提取主机名（去掉端口部分）
+                    domain_host = domain.split(":")[0] if ":" in domain else domain
+                    http_url = f"http://{domain_host}:{public_port}"
+                    await ws.send_json({
+                        "type": "http_port_registered",
+                        "local_port": lp_int,
+                        "public_port": public_port,
+                        "http_url": http_url,
+                    })
+                    logger.info(f"隧道 {code} HTTP 独立端口已分配: {http_url} -> localhost:{lp_int}")
+
                 elif msg_type == "tcp_register":
                     # 客户端注册 TCP 转发服务（如 SSH）
                     services = data.get("services", [])
@@ -1117,6 +1380,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
             pass
         else:
             await _cleanup_tcp_for_tunnel(code)
+            await _cleanup_http_port_for_tunnel(code)
 
     return ws
 

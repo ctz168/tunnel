@@ -413,7 +413,8 @@ class P2PProxy:
         body = await request.read()
         try:
             async with self.session.request(
-                request.method, target, headers=headers, data=body
+                request.method, target, headers=headers, data=body,
+                allow_redirects=False
             ) as resp:
                 resp_body = await resp.read()
                 pass_headers = {
@@ -431,7 +432,8 @@ class P2PProxy:
 
 class TunnelClient:
     def __init__(self, server: str, key: str, local_port: int, local_host: str,
-                 p2p: bool, p2p_port: int, tcp_ports: str = ""):
+                 p2p: bool, p2p_port: int, tcp_ports: str = "",
+                 http_port_mode: bool = False):
         self.server = server
         self.key = key
         self.local_port = local_port
@@ -439,6 +441,7 @@ class TunnelClient:
         self.p2p = p2p
         self.p2p_port = p2p_port
         self.tcp_ports = tcp_ports  # 逗号分隔的端口号，如 "22,3306"
+        self.http_port_mode = http_port_mode  # 是否使用 HTTP 独立端口模式
         self.ws: aiohttp.ClientWebSocketResponse | None = None
         self.session: aiohttp.ClientSession | None = None
         self.req_count = 0
@@ -457,10 +460,12 @@ class TunnelClient:
         # 活跃的 TCP 流: stream_id -> {"reader": StreamReader, "writer": StreamWriter, "task": Task}
         self._tcp_streams: dict[str, dict] = {}
         # 已注册的 TCP 服务: [{local_port, public_port, name}]
+        # ---- HTTP 独立端口状态 ----
+        self._http_port_info: dict | None = None  # {"local_port", "public_port", "http_url"}
         self._tcp_services: list[dict] = []
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.5.1 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)")
+        print(f"\n  Tunnel Client v2.6.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP)")
         print(f"  服务器:   {self.server}")
         print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:     {self.local_host}:{self.local_port}")
@@ -554,6 +559,13 @@ class TunnelClient:
                         "services": services,
                     })
 
+            # 注册 HTTP 独立端口（如果启用了 --http-port 模式）
+            if self.http_port_mode and self.ws and not self.ws.closed:
+                await self.ws.send_json({
+                    "type": "http_port_register",
+                    "local_port": self.local_port,
+                })
+
         elif t == "ping":
             # 心跳响应：必须立即回复，不等待任何其他操作
             if self.ws and not self.ws.closed:
@@ -573,6 +585,19 @@ class TunnelClient:
             self._tcp_services = services
             for svc in services:
                 print(f"  [TCP] {svc.get('name', 'tcp')} -> localhost:{svc.get('local_port')} (公网端口: {svc.get('public_port')})")
+
+        elif t == "http_port_registered":
+            # 服务端已分配 HTTP 独立端口
+            err = data.get("error")
+            if err:
+                print(f"  [HTTP端口] 分配失败: {err}")
+            else:
+                self._http_port_info = {
+                    "local_port": data.get("local_port"),
+                    "public_port": data.get("public_port"),
+                    "http_url": data.get("http_url", ""),
+                }
+                print(f"  [HTTP端口] localhost:{data.get('local_port')} -> {data.get('http_url')} (公网端口: {data.get('public_port')})")
 
         elif t == "tcp_open":
             # 服务端通知：有新的外部 TCP 连接，需要连接本地端口
@@ -765,7 +790,7 @@ class TunnelClient:
         try:
             # 使用更长的超时（600秒），匹配服务端超时
             timeout = aiohttp.ClientTimeout(total=600)
-            async with self.session.request(method, target, headers=headers, data=body, timeout=timeout) as resp:
+            async with self.session.request(method, target, headers=headers, data=body, timeout=timeout, allow_redirects=False) as resp:
                 resp_body = await resp.read()
                 resp_headers = {
                     k: v
@@ -773,8 +798,9 @@ class TunnelClient:
                     if k.lower() not in ("transfer-encoding", "connection")
                 }
 
-                # ---- 路径重写 (仅在隧道编码存在时) ----
-                if prefix:
+                # ---- 路径重写 (仅在路径前缀模式下) ----
+                # HTTP 独立端口模式（http_port_mode=True）下，请求直接透传，无需重写
+                if prefix and not self.http_port_mode:
                     ct = resp_headers.get("Content-Type", "").lower()
                     status = resp.status
 
@@ -987,7 +1013,7 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.5.1 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)",
+        description="Tunnel Client v2.6.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -996,6 +1022,7 @@ def main():
   tunnel-p2p-client -k YOUR_TOKEN -p 80 --no-p2p
   tunnel-p2p-client -k YOUR_TOKEN -p 8080 --tcp-ports 22       转发 SSH
   tunnel-p2p-client -k YOUR_TOKEN -p 8080 --tcp-ports 22,3306  转发 SSH + MySQL
+  tunnel-p2p-client -k YOUR_TOKEN -p 8080 --http-port          HTTP 独立端口模式（推荐）
 
 P2P 模式 (默认启用):
   优先级: IPv6 直连 > UPnP IPv4 > 中继
@@ -1005,6 +1032,11 @@ P2P 模式 (默认启用):
 TCP 转发:
   --tcp-ports  逗号分隔的本地 TCP 端口，服务端会为每个端口分配公网端口
                支持: SSH(22), MySQL(3306), PostgreSQL(5432), Redis(6379) 等
+
+HTTP 独立端口模式:
+  --http-port  为此隧道分配独立的 HTTP 公网端口（如 aicq.online:7900）
+               无需路径前缀重写，所有请求直接透传，彻底避免地址问题
+               同时保留路径前缀模式作为备用访问方式
         """,
     )
     parser.add_argument("-k", "--key", required=True, help="认证令牌")
@@ -1014,6 +1046,7 @@ TCP 转发:
     parser.add_argument("--p2p-port", type=int, default=0, help="P2P 监听端口 (默认: 与本地端口相同)")
     parser.add_argument("--no-p2p", action="store_true", help="禁用 P2P，强制使用中继模式")
     parser.add_argument("--tcp-ports", default="", help="TCP 转发端口，逗号分隔 (如: 22,3306)")
+    parser.add_argument("--http-port", action="store_true", help="启用 HTTP 独立端口模式（推荐，避免路径重写问题）")
     args = parser.parse_args()
 
     p2p_enabled = not args.no_p2p
@@ -1027,6 +1060,7 @@ TCP 转发:
         p2p=p2p_enabled,
         p2p_port=p2p_port,
         tcp_ports=args.tcp_ports.strip(),
+        http_port_mode=args.http_port,
     )
 
     loop = asyncio.new_event_loop()

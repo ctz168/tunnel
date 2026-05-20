@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tunnel-p2p-client"
-version = "2.5.1"
-description = "Tunnel 内网穿透客户端 - 支持 IPv6/IPv4 P2P 直连与中继双模式 + TCP 转发 (修复竞态条件)"
+version = "2.6.0"
+description = "Tunnel 内网穿透客户端 - 支持 IPv6/IPv4 P2P + 中继 + HTTP独立端口 + TCP转发 + 路径重写"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8"

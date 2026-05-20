@@ -47,6 +47,16 @@ CREATE TABLE IF NOT EXISTS tunnel_tcp_port (
     UNIQUE(public_port)
 );
 
+CREATE TABLE IF NOT EXISTS tunnel_http_port (
+    id          TEXT PRIMARY KEY,
+    tunnel_code TEXT NOT NULL,
+    local_port  INTEGER NOT NULL,
+    public_port INTEGER NOT NULL,
+    created_at  TEXT NOT NULL,
+    UNIQUE(tunnel_code),
+    UNIQUE(public_port)
+);
+
 CREATE TABLE IF NOT EXISTS tunnel_log (
     id          TEXT PRIMARY KEY,
     tunnel_id   TEXT NOT NULL,
@@ -286,6 +296,37 @@ async def save_tcp_port(db: aiosqlite.Connection, tunnel_code: str,
 async def delete_tcp_ports(db: aiosqlite.Connection, tunnel_code: str):
     """删除隧道的所有 TCP 端口映射"""
     await db.execute("DELETE FROM tunnel_tcp_port WHERE tunnel_code = ?", (tunnel_code,))
+    await db.commit()
+
+
+# ======================== HTTP 端口持久化 ========================
+
+async def get_http_port(db: aiosqlite.Connection, tunnel_code: str) -> Optional[dict]:
+    """获取隧道已持久化的 HTTP 端口映射"""
+    cursor = await db.execute(
+        "SELECT local_port, public_port FROM tunnel_http_port WHERE tunnel_code = ?",
+        (tunnel_code,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        return {"local_port": row[0], "public_port": row[1]}
+    return None
+
+
+async def save_http_port(db: aiosqlite.Connection, tunnel_code: str,
+                         local_port: int, public_port: int):
+    """持久化一条 HTTP 端口映射（每个隧道只有一个 HTTP 端口）"""
+    await db.execute(
+        "INSERT OR REPLACE INTO tunnel_http_port (id, tunnel_code, local_port, public_port, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), tunnel_code, local_port, public_port, _now()),
+    )
+    await db.commit()
+
+
+async def delete_http_port(db: aiosqlite.Connection, tunnel_code: str):
+    """删除隧道的 HTTP 端口映射"""
+    await db.execute("DELETE FROM tunnel_http_port WHERE tunnel_code = ?", (tunnel_code,))
     await db.commit()
 
 

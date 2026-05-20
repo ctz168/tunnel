@@ -31,12 +31,19 @@ tunnel-p2p-client --key YOUR_TOKEN --port 8080
 | `--p2p-port` | P2P 直连监听端口 | 与 --port 相同 |
 | `--no-p2p` | 禁用 P2P，强制使用中继模式 | false |
 | `--tcp-ports` | TCP 转发端口，逗号分隔（如 `22,3306`） | - |
+| `--http-port` | HTTP 独立端口模式（推荐，避免路径重写问题） | false |
 
 ### 使用示例
 
 ```bash
 # 将本地 3000 端口暴露到公网
+# 默认路径前缀模式: http://aicq.online:7739/TUNNEL_CODE/
 tunnel-p2p-client -k YOUR_TOKEN -p 3000
+
+# HTTP 独立端口模式（推荐！）
+# 每个隧道分配独立端口，如 http://aicq.online:7900
+# 无路径前缀，不需要任何重写，彻底避免地址问题
+tunnel-p2p-client -k YOUR_TOKEN -p 3000 --http-port
 
 # 指定自定义服务器
 tunnel-p2p-client -k YOUR_TOKEN -p 80 -s your-server.com:7739
@@ -56,6 +63,37 @@ tunnel-p2p-client -k YOUR_TOKEN -p 8080 --no-p2p
 | 3 | **中继模式** | 流量经服务器转发，任何网络环境都可用 |
 
 P2P 直连成功后，访问者的流量**不经过服务器**，直接连接到你的机器，降低服务器负载。
+
+## HTTP 独立端口模式（推荐）
+
+路径前缀模式（`domain:7739/TUNNEL_CODE/`）需要对 HTML/CSS/JS/重定向等做大量路径重写，容易出现遗漏导致资源加载失败。
+
+**HTTP 独立端口模式**为每个隧道分配独立的 HTTP 公网端口（如 `aicq.online:7900`），访问者直接访问该端口，**无需任何路径重写**，彻底解决地址问题。
+
+```bash
+# 使用 HTTP 独立端口模式
+tunnel-p2p-client -k YOUR_TOKEN -p 8080 --http-port
+```
+
+启动后会显示：
+```
+[OK] 隧道已建立
+[OK] 隧道编码: XXXXXXXX
+[OK] 中继地址: http://aicq.online:7739/XXXXXXXX
+[HTTP端口] localhost:8080 -> http://aicq.online:7900 (公网端口: 7900)
+```
+
+访问 `http://aicq.online:7900` 即可直接使用本地服务，所有路径原样透传。
+
+### 服务端配置
+
+HTTP 独立端口范围默认 7900-7999，可通过环境变量配置：
+```bash
+export HTTP_PORT_START=7900
+export HTTP_PORT_END=7999
+```
+
+确保服务器防火墙放行该端口范围。
 
 ## 服务端部署
 
@@ -178,7 +216,7 @@ sudo passwd root
 # 安装 Python 和 pip（如果还没有）
 sudo apt install python3 python3-pip -y
 
-# 安装隧道客户端（v2.5.1+）
+# 安装隧道客户端（v2.6.0+）
 pip install tunnel-p2p-client --break-system-packages
 ```
 
@@ -191,7 +229,7 @@ tunnel-p2p-client --key YOUR_TOKEN --port 8080 --tcp-ports 22
 启动成功后会显示：
 
 ```
-Tunnel Client v2.5.1 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)
+Tunnel Client v2.6.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP)
 [OK] 隧道已建立
 [OK] 隧道编码: XXXXXXXX
 [TCP] tcp-22 -> localhost:22 (公网端口: 7800)
@@ -292,7 +330,7 @@ ssh -p 8022 root@127.0.0.1
 # 安装 Python 和 pip（如果还没有）
 apt install python3 python3-pip -y
 
-# 安装隧道客户端（v2.5.1+）
+# 安装隧道客户端（v2.6.0+）
 pip install tunnel-p2p-client --break-system-packages
 ```
 
@@ -305,7 +343,7 @@ tunnel-p2p-client --key YOUR_TOKEN --port 12345 --tcp-ports 8022
 启动成功后会显示：
 
 ```
-Tunnel Client v2.5.1 (IPv6/IPv4 P2P + Relay + Path-Rewrite + TCP)
+Tunnel Client v2.6.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP)
 [OK] 隧道已建立
 [OK] 隧道编码: XXXXXXXX
 [TCP] tcp-8022 -> localhost:8022 (公网端口: 7800)
