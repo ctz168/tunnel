@@ -199,15 +199,26 @@ async def update_tunnel_public_url(db: aiosqlite.Connection, code: str,
     await db.commit()
 
 
+# 哨兵值：区分"不更新 public_url"和"设为 NULL"
+_UNSET = object()
+
+
 async def update_tunnel_p2p_info(db: aiosqlite.Connection, code: str,
-                                   p2p_info: Optional[str], public_url: Optional[str] = None):
-    """更新隧道的 P2P 详细信息 (JSON 格式)"""
-    if public_url is not None:
+                                   p2p_info: Optional[str], public_url=_UNSET):
+    """更新隧道的 P2P 详细信息 (JSON 格式)
+
+    Args:
+        p2p_info: P2P JSON 信息，传 None 表示清空
+        public_url: P2P 公网地址。传 None 表示清空，不传（默认）表示不更新该字段
+    """
+    if public_url is not _UNSET:
+        # 显式传入了 public_url（包括 None），同时更新两个字段
         await db.execute(
             "UPDATE tunnel SET p2p_info = ?, public_url = ?, updated_at = ? WHERE code = ?",
             (p2p_info, public_url, _now(), code),
         )
     else:
+        # 未传 public_url，仅更新 p2p_info
         await db.execute(
             "UPDATE tunnel SET p2p_info = ?, updated_at = ? WHERE code = ?",
             (p2p_info, _now(), code),
