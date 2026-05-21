@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tunnel 隧道管理</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    /* Claude Code warm light palette */
+    --bg: #FDF6E3;
+    --bg-secondary: #F5EDDA;
+    --card: #FFFFFF;
+    --card-hover: #FFFCF5;
+    --border: #E8DFC8;
+    --border-light: #F0E8D8;
+    --text: #3C3836;
+    --text-secondary: #665C54;
+    --text-muted: #9C9488;
+    --accent: #C0792A;
+    --accent-hover: #A8661E;
+    --accent-light: #FDF0E0;
+    --accent-subtle: #FBF2E5;
+    --danger: #C4382F;
+    --danger-hover: #A82D26;
+    --danger-light: #FDF0EF;
+    --success: #5A8A3C;
+    --success-light: #F0F7EB;
+    --warning: #B8860B;
+    --warning-light: #FDF6E0;
+    --info: #4A7C9B;
+    --info-light: #EEF5FA;
+    --radius: 10px;
+    --radius-lg: 14px;
+    --shadow-sm: 0 1px 3px rgba(60,56,54,.06), 0 1px 2px rgba(60,56,54,.04);
+    --shadow: 0 2px 12px rgba(60,56,54,.07), 0 1px 4px rgba(60,56,54,.04);
+    --shadow-lg: 0 8px 30px rgba(60,56,54,.1), 0 2px 8px rgba(60,56,54,.05);
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", "PingFang SC", sans-serif;
+    --font-mono: "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", Menlo, "Courier New", monospace;
+    --transition: 0.18s ease;
+  }
+  body{font-family:var(--font-sans);background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+  a{color:var(--accent);text-decoration:none}
+  ::selection{background:var(--accent);color:#fff}
+
+  /* ── Header ── */
+  .header{
+    background: linear-gradient(135deg, #FBF2E5 0%, #FDF6E3 50%, #F8EDDA 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: blur(8px);
+  }
+  .header::after{
+    content:'';position:absolute;bottom:0;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,transparent,var(--accent),transparent);opacity:.3;
+  }
+  .header-title{font-size:20px;font-weight:700;letter-spacing:-.3px;display:flex;align-items:center;gap:8px;color:var(--text)}
+  .header-title .icon{width:28px;height:28px;border-radius:7px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0}
+  .header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .domain-display{display:flex;align-items:center;gap:8px;background:var(--card);padding:6px 12px;border-radius:var(--radius);font-size:13px;border:1px solid var(--border);box-shadow:var(--shadow-sm)}
+  .domain-display .label{color:var(--text-muted);font-family:var(--font-sans)}
+  .domain-display span:last-of-type{font-family:var(--font-mono);color:var(--text-secondary);font-size:13px}
+
+  /* ── Buttons ── */
+  .btn{display:inline-flex;align-items:center;gap:5px;padding:8px 16px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;transition:all var(--transition);line-height:1.4;white-space:nowrap;font-family:var(--font-sans)}
+  .btn:active{transform:scale(.97)}
+  .btn-primary{background:var(--accent);color:#fff;box-shadow:0 1px 4px rgba(192,121,42,.2)}.btn-primary:hover{background:var(--accent-hover);box-shadow:0 2px 8px rgba(192,121,42,.3)}
+  .btn-ghost{background:var(--card);color:var(--text-secondary);border:1px solid var(--border)}.btn-ghost:hover{background:var(--bg-secondary);border-color:var(--text-muted);color:var(--text)}
+  .btn-danger{background:var(--danger);color:#fff;box-shadow:0 1px 4px rgba(196,56,47,.15)}.btn-danger:hover{background:var(--danger-hover)}
+  .btn-sm{padding:5px 10px;font-size:12px;border-radius:6px}
+  .btn-icon{padding:6px 8px;font-size:14px;line-height:1}
+
+  /* ── Main ── */
+  .main{max-width:1200px;margin:0 auto;padding:24px 24px 60px}
+  .toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px}
+  .toolbar h2{font-size:17px;font-weight:700;color:var(--text)}
+
+  /* ── Card / Table ── */
+  .card{background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--border);overflow:hidden;box-shadow:var(--shadow-sm)}
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead{background:var(--bg-secondary)}
+  th{padding:11px 14px;text-align:left;font-weight:600;color:var(--text-muted);white-space:nowrap;font-size:12px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)}
+  td{padding:12px 14px;border-top:1px solid var(--border-light);vertical-align:middle}
+  tr:hover td{background:var(--card-hover)}
+
+  /* ── Status ── */
+  .status{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0}
+  .dot-online{background:var(--success);box-shadow:0 0 0 3px rgba(90,138,60,.15)}
+  .dot-offline{background:var(--text-muted);opacity:.5}
+  .public-url{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:12px;word-break:break-all;color:var(--text-secondary)}
+  .actions-cell{display:flex;gap:5px;flex-wrap:wrap}
+
+  /* ── Tags / Badges ── */
+  .tag{display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:5px;letter-spacing:.2px}
+  .tag-relay{background:var(--info-light);color:var(--info)}
+  .tag-p2p{background:var(--success-light);color:var(--success)}
+  .tag-ipv6{background:#E8F5E9;color:#2E7D32}
+  .tag-upnp{background:#E3F2FD;color:#1565C0}
+  .tag-dual{background:#F1F8E9;color:#33691E}
+
+  /* ── Empty state ── */
+  .empty{text-align:center;padding:56px 20px;color:var(--text-muted)}
+  .empty .big{font-size:44px;margin-bottom:12px;opacity:.6}
+  .empty p{font-size:14px;margin-bottom:4px}
+
+  /* ── Traffic ── */
+  .traffic{font-size:12px;color:var(--text-muted);white-space:nowrap}
+  .traffic b{color:var(--text);font-weight:600}
+
+  /* ── Modal ── */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(60,56,54,.3);z-index:100;justify-content:center;align-items:center;padding:20px;backdrop-filter:blur(2px)}
+  .modal-overlay.active{display:flex}
+  .modal{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);width:100%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:var(--shadow-lg);animation:modalIn .22s ease}
+  @keyframes modalIn{from{opacity:0;transform:translateY(-12px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+  .modal-header{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 0}
+  .modal-header h3{font-size:16px;font-weight:700;color:var(--text)}
+  .modal-close{background:none;border:none;color:var(--text-muted);font-size:22px;cursor:pointer;padding:4px 6px;line-height:1;border-radius:6px;transition:all var(--transition)}.modal-close:hover{background:var(--bg-secondary);color:var(--text)}
+  .modal-body{padding:18px 24px}
+  .form-group{margin-bottom:16px}
+  .form-group label{display:block;font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px}
+  .form-group input,.form-group textarea{width:100%;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;outline:none;transition:all var(--transition);font-family:var(--font-sans)}
+  .form-group input:focus,.form-group textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(192,121,42,.1)}
+  .form-group input::placeholder,.form-group textarea::placeholder{color:var(--text-muted);opacity:.7}
+  .form-group textarea{resize:vertical;min-height:60px}
+  .form-actions{display:flex;justify-content:flex-end;gap:8px;padding:0 24px 20px}
+
+  /* ── Token box ── */
+  .token-box{background:var(--accent-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-top:8px}
+  .token-box .token-label{font-size:12px;color:var(--accent);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.3px}
+  .token-box .token-value{font-family:var(--font-mono);font-size:13px;word-break:break-all;background:var(--bg);padding:10px 12px;border-radius:8px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;border:1px solid var(--border-light)}
+  .token-box .token-value code{flex:1;white-space:pre-wrap;color:var(--text)}
+  .token-box .warning{margin-top:10px;font-size:12px;color:var(--warning);display:flex;align-items:flex-start;gap:6px}
+
+  /* ── Log viewer ── */
+  .log-container{max-height:400px;overflow-y:auto;font-family:var(--font-mono);font-size:12px;background:var(--bg);border-radius:8px;padding:4px 0;border:1px solid var(--border-light)}
+  .log-line{padding:6px 12px;border-bottom:1px solid var(--border-light);display:flex;gap:10px;transition:background var(--transition)}
+  .log-line:hover{background:var(--card-hover)}
+  .log-line:last-child{border-bottom:none}
+  .log-time{color:var(--text-muted);white-space:nowrap;flex-shrink:0;font-size:11px}
+  .log-action{color:var(--accent);font-weight:600;white-space:nowrap;flex-shrink:0;min-width:60px}
+  .log-msg{color:var(--text);word-break:break-all}
+  .log-empty{padding:30px;text-align:center;color:var(--text-muted);font-family:var(--font-sans)}
+
+  /* ── Toast ── */
+  .toast-container{position:fixed;top:20px;right:20px;z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+  .toast{padding:11px 18px;border-radius:8px;font-size:13px;font-weight:600;color:#fff;box-shadow:var(--shadow-lg);animation:toastIn .25s ease,toastOut .3s ease 2.7s forwards;pointer-events:auto;max-width:340px;word-break:break-word;font-family:var(--font-sans)}
+  .toast-success{background:var(--success)}
+  .toast-error{background:var(--danger)}
+  .toast-info{background:var(--accent)}
+  @keyframes toastIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+  @keyframes toastOut{to{opacity:0;transform:translateX(40px)}}
+
+  /* ── Confirm dialog ── */
+  .confirm-text{font-size:14px;color:var(--text-secondary);margin:12px 0 4px;line-height:1.7}
+  .confirm-text strong{color:var(--danger)}
+
+  /* ── Domain edit ── */
+  .domain-edit-row{display:flex;align-items:center;gap:8px}
+  .domain-edit-row input{padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;font-family:var(--font-mono);width:200px;outline:none;transition:all var(--transition)}
+  .domain-edit-row input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(192,121,42,.1)}
+
+  /* ── Auth pages ── */
+  .auth-container{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px}
+  .auth-container::before{
+    content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;
+    background:radial-gradient(ellipse at 30% 20%, rgba(192,121,42,.05) 0%, transparent 50%),
+               radial-gradient(ellipse at 70% 80%, rgba(192,121,42,.03) 0%, transparent 50%);
+    pointer-events:none;
+  }
+  .auth-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:36px;max-width:400px;width:100%;box-shadow:var(--shadow-lg);position:relative}
+  .auth-card h2{font-size:20px;margin-bottom:4px;display:flex;align-items:center;gap:10px;color:var(--text)}
+  .auth-card .subtitle{color:var(--text-muted);margin-bottom:24px;font-size:13px}
+  .auth-card .form-group{margin-bottom:16px}
+  .auth-card .form-actions{justify-content:stretch;padding:0}
+  .auth-card .form-actions .btn{flex:1;justify-content:center}
+
+  /* ── Desktop: wide table columns ── */
+  @media(min-width:1024px){
+    .main{padding:28px 32px 60px}
+    .header{padding:14px 32px}
+    th,td{padding:12px 16px;font-size:13px}
+  }
+
+  /* ── Tablet ── */
+  @media(max-width:1023px){
+    .main{padding:20px 16px 60px}
+    .header{padding:12px 16px}
+  }
+
+  /* ── Mobile ── */
+  @media(max-width:768px){
+    .header{padding:12px 14px;gap:10px}
+    .header-title{font-size:17px}
+    .header-title .icon{width:24px;height:24px;font-size:13px}
+    .header-right{width:100%;justify-content:flex-end}
+    .domain-display{width:100%;justify-content:center;font-size:12px;padding:5px 10px}
+    .main{padding:14px 12px 80px}
+    .toolbar{flex-direction:column;align-items:stretch;gap:10px}
+    .toolbar h2{font-size:15px}
+    .toolbar .btn-primary{width:100%;justify-content:center}
+
+    /* Responsive table → card layout */
+    .table-wrap table, .table-wrap thead, .table-wrap tbody, .table-wrap th, .table-wrap td, .table-wrap tr {
+      display: block;
+    }
+    .table-wrap thead{display:none}
+    .table-wrap tr{
+      padding:14px;margin:8px;border:1px solid var(--border);border-radius:var(--radius);
+      background:var(--card);box-shadow:var(--shadow-sm);
+    }
+    .table-wrap tr:hover td{background:transparent}
+    .table-wrap td{
+      padding:3px 0;border:none;display:flex;align-items:center;justify-content:space-between;
+      font-size:13px;
+    }
+    .table-wrap td::before{
+      content:attr(data-label);font-weight:600;font-size:11px;color:var(--text-muted);
+      text-transform:uppercase;letter-spacing:.3px;flex-shrink:0;margin-right:12px;
+    }
+    .table-wrap td:first-child{
+      flex-direction:column;align-items:flex-start;gap:2px;
+    }
+    .table-wrap td:first-child::before{
+      margin-right:0;margin-bottom:2px;
+    }
+    .table-wrap td:first-child strong{font-size:14px}
+    .table-wrap .actions-cell{width:100%;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);margin-top:6px}
+    .table-wrap .actions-cell::before{display:none}
+    .table-wrap .traffic{flex-wrap:wrap;gap:2px 8px}
+    .table-wrap .public-url{flex-wrap:wrap}
+
+    /* Modals */
+    .modal{max-width:95vw;border-radius:var(--radius)}
+    .modal-header{padding:16px 18px 0}
+    .modal-header h3{font-size:15px}
+    .modal-body{padding:16px 18px}
+    .form-actions{padding:0 18px 16px}
+    .domain-edit-row input{width:100%}
+    .domain-edit-row{flex-wrap:wrap}
+
+    /* Auth */
+    .auth-card{padding:28px 22px;margin:12px}
+    .auth-card h2{font-size:18px}
+  }
+
+  /* ── Small phones ── */
+  @media(max-width:400px){
+    .header-title{font-size:15px}
+    .btn{padding:7px 12px;font-size:12px}
+    .btn-sm{padding:4px 8px;font-size:11px}
+    .actions-cell .btn{padding:5px 8px;font-size:11px}
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+</style>
+</head>
+<body>
+
+<!-- ============ AUTH: Setup Password ============ -->
+<div class="auth-container" id="authSetup" style="display:none">
+  <div class="auth-card">
+    <h2><span class="icon" style="display:inline-flex;width:28px;height:28px;border-radius:7px;background:var(--accent);align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0">&#x1F512;</span> 设置管理密码</h2>
+    <p class="subtitle">首次使用，请设置管理面板的登录密码</p>
+    <div class="form-group">
+      <label>密码（至少 4 位）</label>
+      <input type="password" id="setupPwd" placeholder="输入密码" autocomplete="new-password">
+    </div>
+    <div class="form-group">
+      <label>确认密码</label>
+      <input type="password" id="setupPwd2" placeholder="再次输入密码" autocomplete="new-password">
+    </div>
+    <div class="form-actions" style="padding:0">
+      <button class="btn btn-primary" id="setupBtn" onclick="doSetup()">确认设置</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ AUTH: Login ============ -->
+<div class="auth-container" id="authLogin" style="display:none">
+  <div class="auth-card">
+    <h2><span class="icon" style="display:inline-flex;width:28px;height:28px;border-radius:7px;background:var(--accent);align-items:center;justify-content:center;color:#fff;font-size:15px;flex-shrink:0">&#x1F510;</span> 登录管理面板</h2>
+    <p class="subtitle">请输入管理密码</p>
+    <div class="form-group">
+      <label>密码</label>
+      <input type="password" id="loginPwd" placeholder="输入密码" autocomplete="current-password"
+             onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="form-actions" style="padding:0">
+      <button class="btn btn-primary" onclick="doLogin()">登录</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MAIN APP ============ -->
+<div id="mainApp" style="display:none">
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-title"><span class="icon">&#x1F310;</span> Tunnel 管理面板</div>
+  <div class="header-right">
+    <div id="domainArea">
+      <div class="domain-display">
+        <span class="label">&#x1F517; 域名</span>
+        <span id="domainText">{{ domain }}</span>
+        <button class="btn btn-ghost btn-icon" onclick="showDomainEdit()" title="编辑域名">&#x270F;&#xFE0F;</button>
+      </div>
+    </div>
+    <div id="sslBadgeArea" style="display:none">
+      <div class="domain-display" style="cursor:pointer" onclick="openSslModal()" title="点击管理证书">
+        <span class="label">&#x1F512; SSL</span>
+        <span id="sslDaysLeft" style="font-weight:600"></span>
+      </div>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="doLogout()">&#x1F6AA; 退出</button>
+  </div>
+</header>
+
+<!-- Main -->
+<main class="main">
+  <div class="toolbar">
+    <h2>&#x1F4CA; 隧道列表</h2>
+    <button class="btn btn-primary" onclick="openCreateModal()">&#x2795; 创建隧道</button>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>编码</th>
+            <th>客户端</th>
+            <th>状态</th>
+            <th>流量</th>
+            <th>公网地址</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="tunnelBody"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" style="display:none">
+      <div class="empty">
+        <div class="big">&#x1F50C;</div>
+        <p>暂无隧道</p>
+        <p style="font-size:13px">点击上方 "创建隧道" 按钮添加第一个隧道</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+</div><!-- end mainApp -->
+
+<!-- Create Tunnel Modal -->
+<div class="modal-overlay" id="createModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>&#x2795; 创建隧道</h3>
+      <button class="modal-close" onclick="closeCreateModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="createFormArea">
+      <div class="form-group">
+        <label>名称 *</label>
+        <input type="text" id="cName" placeholder="例如: my-web">
+      </div>
+      <div class="form-group">
+        <label>认证令牌 <span style="font-weight:400;color:var(--text-muted);text-transform:none;letter-spacing:0">（留空自动生成）</span></label>
+        <input type="text" id="cToken" placeholder="自定义令牌，留空则自动生成">
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <textarea id="cDesc" placeholder="可选，描述该隧道用途"></textarea>
+      </div>
+    </div>
+    <div class="modal-body" id="createResultArea" style="display:none"></div>
+    <div class="form-actions" id="createActions">
+      <button class="btn btn-ghost" onclick="closeCreateModal()">取消</button>
+      <button class="btn btn-primary" id="createSubmitBtn" onclick="createTunnel()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- View Token Modal -->
+<div class="modal-overlay" id="tokenModal">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <h3>&#x1F511; 隧道密钥</h3>
+      <button class="modal-close" onclick="closeTokenModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="tokenContent"></div>
+    <div class="form-actions">
+      <button class="btn btn-ghost" onclick="closeTokenModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Log Viewer Modal -->
+<div class="modal-overlay" id="logModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>&#x1F4CB; 隧道日志</h3>
+      <button class="modal-close" onclick="closeLogModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="log-container" id="logContent"><div class="log-empty">加载中...</div></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-ghost" onclick="closeLogModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Delete Modal -->
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <h3>&#x26A0;&#xFE0F; 确认删除</h3>
+      <button class="modal-close" onclick="closeConfirmModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="confirm-text">确定要删除隧道 <strong id="confirmName"></strong> 吗？此操作不可撤销。</div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-ghost" onclick="closeConfirmModal()">取消</button>
+      <button class="btn btn-danger" id="confirmDeleteBtn">&#x1F5D1;&#xFE0F; 删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- SSL Certificate Modal -->
+<div class="modal-overlay" id="sslModal">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-header">
+      <h3>&#x1F512; SSL 证书管理</h3>
+      <button class="modal-close" onclick="closeSslModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="sslModalBody">
+      <div class="log-empty">加载中...</div>
+    </div>
+    <div class="form-actions" id="sslModalActions">
+      <button class="btn btn-ghost" onclick="closeSslModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Globals ── */
+const DOMAIN = "{{ domain }}";
+let tunnels = [];
+let statusMap = {};
+let isLoggedIn = false;
+let authChecked = false;
+let eventSource = null;  // SSE 连接
+let sseReconnectTimer = null;  // SSE 重连定时器
+
+/* ── Auth ── */
+function checkAuth() {
+  fetch('/api/auth/check')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.setup_done) {
+        if (data.logged_in) {
+          showApp();
+        } else {
+          showLogin();
+        }
+      } else {
+        showSetup();
+      }
+    })
+    .catch(function() {
+      showLogin();
+    });
+}
+
+function showSetup() {
+  document.getElementById('authSetup').style.display = 'flex';
+  document.getElementById('authLogin').style.display = 'none';
+  document.getElementById('mainApp').style.display = 'none';
+  setTimeout(function() { document.getElementById('setupPwd').focus(); }, 100);
+}
+
+function showLogin() {
+  document.getElementById('authSetup').style.display = 'none';
+  document.getElementById('authLogin').style.display = 'flex';
+  document.getElementById('mainApp').style.display = 'none';
+  setTimeout(function() { document.getElementById('loginPwd').focus(); }, 100);
+}
+
+function showApp() {
+  isLoggedIn = true;
+  document.getElementById('authSetup').style.display = 'none';
+  document.getElementById('authLogin').style.display = 'none';
+  document.getElementById('mainApp').style.display = '';
+  // 初始加载一次隧道列表和状态
+  fetchTunnels();
+  fetchTunnelStatus();
+  // 加载 SSL 证书状态
+  fetchSslStatus();
+  // 建立 SSE 长连接，接收上下线事件推送
+  connectSSE();
+}
+
+function disconnectSSE() {
+  if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
+  if (eventSource) { eventSource.close(); eventSource = null; }
+}
+
+function connectSSE() {
+  disconnectSSE();
+  // EventSource 只支持 GET，通过 cookie 传递登录态
+  eventSource = new EventSource('/api/events');
+  eventSource.addEventListener('connected', function() {
+    // SSE 连接成功，刷新一次数据
+    fetchTunnels();
+    fetchTunnelStatus();
+  });
+  eventSource.addEventListener('tunnel_online', function(e) {
+    var d = JSON.parse(e.data);
+    showToast('隧道 ' + d.name + ' (' + d.code + ') 已上线', 'success');
+    fetchTunnels();
+    fetchTunnelStatus();
+  });
+  eventSource.addEventListener('tunnel_offline', function(e) {
+    var d = JSON.parse(e.data);
+    showToast('隧道 ' + d.name + ' (' + d.code + ') 已离线', 'info');
+    fetchTunnels();
+    fetchTunnelStatus();
+  });
+  eventSource.addEventListener('server_shutdown', function() {
+    showToast('服务端已关闭', 'error');
+    eventSource.close();
+  });
+  eventSource.onerror = function() {
+    eventSource.close();
+    eventSource = null;
+    // 5 秒后自动重连
+    if (isLoggedIn) {
+      sseReconnectTimer = setTimeout(connectSSE, 5000);
+    }
+  };
+}
+
+function doSetup() {
+  var pwd = document.getElementById('setupPwd').value;
+  var pwd2 = document.getElementById('setupPwd2').value;
+  if (pwd.length < 4) { showToast('密码长度至少 4 位', 'error'); return; }
+  if (pwd !== pwd2) { showToast('两次输入的密码不一致', 'error'); return; }
+  document.getElementById('setupBtn').disabled = true;
+  fetch('/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pwd })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    document.getElementById('setupBtn').disabled = false;
+    if (data.error) { showToast(data.error, 'error'); return; }
+    showToast('密码设置成功', 'success');
+    showApp();
+  })
+  .catch(function() {
+    document.getElementById('setupBtn').disabled = false;
+    showToast('请求失败', 'error');
+  });
+}
+
+function doLogin() {
+  var pwd = document.getElementById('loginPwd').value;
+  if (!pwd) { showToast('请输入密码', 'error'); return; }
+  fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pwd })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) { showToast(data.error, 'error'); return; }
+    showToast('登录成功', 'success');
+    showApp();
+  })
+  .catch(function() {
+    showToast('请求失败', 'error');
+  });
+}
+
+function doLogout() {
+  disconnectSSE();
+  fetch('/api/auth/logout', { method: 'POST' })
+    .then(function() {
+      isLoggedIn = false;
+      tunnels = [];
+      statusMap = {};
+      showLogin();
+      showToast('已退出登录', 'info');
+    });
+}
+
+/* ── Helpers ── */
+function formatBytes(bytes) {
+  if (bytes == null || bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const val = bytes / Math.pow(1024, i);
+  return val < 10 ? val.toFixed(2) + ' ' + units[i] : val.toFixed(1) + ' ' + units[i];
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function timestampStr() {
+  const now = new Date();
+  return now.toLocaleString('zh-CN', { hour12: false });
+}
+
+/* ── Toast ── */
+function showToast(msg, type) {
+  type = type || 'info';
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  const t = document.createElement('div');
+  t.className = 'toast toast-' + type;
+  t.textContent = msg;
+  container.appendChild(t);
+  setTimeout(function() { if (t.parentNode) t.parentNode.removeChild(t); }, 3200);
+}
+
+/* ── Clipboard ── */
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(function() {
+      showToast('已复制', 'success');
+    }).catch(function() {
+      _fallbackCopy(text);
+    });
+  } else {
+    _fallbackCopy(text);
+  }
+}
+function _fallbackCopy(text) {
+  var ok = false;
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    var range = document.createRange();
+    range.selectNodeContents(ta);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    ta.setSelectionRange(0, text.length);
+    ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (ok) { showToast('已复制', 'success'); return; }
+  } catch(e) {}
+  window.prompt('请手动复制以下内容：', text);
+}
+
+/* ── Domain Edit ── */
+function showDomainEdit() {
+  var area = document.getElementById('domainArea');
+  area.innerHTML =
+    '<div class="domain-edit-row">' +
+      '<input type="text" id="domainInput" value="' + escapeHtml(DOMAIN) + '">' +
+      '<button class="btn btn-primary btn-sm" onclick="saveDomain()">保存</button>' +
+      '<button class="btn btn-ghost btn-sm" onclick="cancelDomainEdit()">取消</button>' +
+    '</div>';
+  document.getElementById('domainInput').focus();
+}
+
+function cancelDomainEdit() {
+  document.getElementById('domainArea').innerHTML =
+    '<div class="domain-display">' +
+      '<span class="label">&#x1F517; 域名</span>' +
+      '<span id="domainText">' + escapeHtml(DOMAIN) + '</span>' +
+      '<button class="btn btn-ghost btn-icon" onclick="showDomainEdit()" title="编辑域名">&#x270F;&#xFE0F;</button>' +
+    '</div>';
+}
+
+function saveDomain() {
+  var val = document.getElementById('domainInput').value.trim();
+  if (!val) { showToast('域名不能为空', 'error'); return; }
+  fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain: val })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) { showToast(data.error || '保存失败', 'error'); return; }
+    showToast('域名已更新，刷新页面生效', 'success');
+    setTimeout(function() { location.reload(); }, 800);
+  })
+  .catch(function() { showToast('请求失败', 'error'); });
+}
+
+/* ── Render Tunnels ── */
+function renderTunnels() {
+  var tbody = document.getElementById('tunnelBody');
+  if (!tbody) return;
+  var empty = document.getElementById('emptyState');
+
+  if (!tunnels || tunnels.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  var html = '';
+  tunnels.forEach(function(t) {
+    var sid = String(t.id);
+    var code = t.code || sid;
+    var info = statusMap[code] || {};
+    var online = info.online ? true : false;
+    var p2pUrl = t.public_url || '';
+    var p2pMode = online && p2pUrl;
+    var pubUrl = p2pUrl || ('http://' + DOMAIN + '/' + code);
+    var bytesIn = info.bytes_in || 0;
+    var bytesOut = info.bytes_out || 0;
+
+    // P2P mode badges
+    var p2pInfo = null;
+    var p2pBadge = '';
+    try { p2pInfo = t.p2p_info ? JSON.parse(t.p2p_info) : null; } catch(e) {}
+    if (p2pInfo && p2pInfo.mode) {
+      var tagMap = {
+        'ipv6': '<span class="tag tag-ipv6">IPv6</span>',
+        'upnp': '<span class="tag tag-upnp">UPnP</span>',
+        'dual': '<span class="tag tag-dual">Dual</span>'
+      };
+      p2pBadge = tagMap[p2pInfo.mode] || '';
+    } else if (p2pMode) {
+      p2pBadge = '<span class="tag tag-p2p">P2P</span>';
+    }
+    var relayTag = online && !p2pMode ? '<span class="tag tag-relay">中继</span>' : '';
+
+    // Traffic info line
+    var trafficModeLine = '';
+    if (p2pBadge) {
+      trafficModeLine = '<span style="font-size:11px;color:var(--success)">P2P 直连</span>';
+    } else if (online) {
+      trafficModeLine = '<span style="font-size:11px;color:var(--text-muted)">服务端中继</span>';
+    }
+
+    var escapedName = escapeHtml(t.name || '-');
+    var escapedPubUrl = escapeHtml(pubUrl).replace(/'/g, "\\'");
+
+    html += '<tr>' +
+      '<td data-label="名称"><strong>' + escapedName + '</strong>' +
+        (t.description ? '<br><span style="font-size:12px;color:var(--text-muted)">' + escapeHtml(t.description) + '</span>' : '') +
+      '</td>' +
+      '<td data-label="编码" style="font-family:var(--font-mono);font-size:13px;color:var(--text-muted)">' + escapeHtml(code) + '</td>' +
+      '<td data-label="客户端" style="font-family:var(--font-mono);font-size:13px">' + (t.local_host || t.local_port ? escapeHtml((t.local_host || 'localhost') + ':' + t.local_port) : '<span style="color:var(--text-muted);font-size:12px">未连接</span>') + '</td>' +
+      '<td data-label="状态">' +
+        '<span class="status">' +
+          '<span class="dot ' + (online ? 'dot-online' : 'dot-offline') + '"></span>' +
+          (online ? '在线 ' + p2pBadge + relayTag : '离线') +
+        '</span>' +
+      '</td>' +
+      '<td data-label="流量">' +
+        '<span class="traffic">' +
+          (trafficModeLine ? trafficModeLine + ' &middot; ' : '') +
+          '&#x2B06; <b>' + formatBytes(bytesIn) + '</b> &middot; &#x2B07; <b>' + formatBytes(bytesOut) + '</b>' +
+        '</span>' +
+      '</td>' +
+      '<td data-label="地址"><div class="public-url">' +
+        '<span style="flex:1">' + escapeHtml(pubUrl) + '</span>' +
+        '<button class="btn btn-ghost btn-icon btn-sm" onclick="copyText(\'' + escapedPubUrl + '\')" title="复制">&#x1F4CB;</button>' +
+      '</div></td>' +
+      '<td data-label="操作"><div class="actions-cell">' +
+        '<button class="btn btn-ghost btn-sm" onclick="viewToken(\'' + sid + '\',\'' + escapedName + '\')">&#x1F511; 密钥</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="openLogModal(\'' + sid + '\',\'' + escapedName + '\')">&#x1F4CB; 日志</button>' +
+        '<button class="btn btn-danger btn-sm" onclick="confirmDelete(\'' + sid + '\',\'' + escapedName + '\')">&#x1F5D1;&#xFE0F;</button>' +
+      '</div></td>' +
+    '</tr>';
+  });
+  tbody.innerHTML = html;
+}
+
+/* ── Fetch Tunnels ── */
+function fetchTunnels() {
+  if (!isLoggedIn) return;
+  fetch('/api/tunnels')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      tunnels = data.tunnels || data || [];
+      renderTunnels();
+    })
+    .catch(function() {});
+}
+
+/* ── Fetch Tunnel Status ── */
+function fetchTunnelStatus() {
+  if (!isLoggedIn) return;
+  fetch('/api/tunnel-status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      statusMap = {};
+      if (data && data.tunnels && typeof data.tunnels === 'object') {
+        statusMap = data.tunnels;
+      }
+      renderTunnels();
+    })
+    .catch(function() {});
+}
+
+/* ── View Token ── */
+function viewToken(id, name) {
+  document.getElementById('tokenModal').classList.add('active');
+  document.getElementById('tokenContent').innerHTML = '<div class="log-empty">加载中...</div>';
+  fetch('/api/tunnels/' + id + '/token')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var token = data.auth_token || '';
+      document.getElementById('tokenContent').innerHTML =
+        '<p style="margin-bottom:8px;color:var(--text-muted);font-size:13px">隧道: <strong style="color:var(--text)">' + escapeHtml(name) + '</strong></p>' +
+        '<div class="token-box">' +
+          '<div class="token-label">&#x1F512; 认证令牌</div>' +
+          '<div class="token-value"><code id="viewTokenCode">' + escapeHtml(token) + '</code>' +
+            '<button class="btn btn-primary btn-sm" onclick="copyText(document.getElementById(\'viewTokenCode\').textContent)">&#x1F4CB; 复制</button>' +
+          '</div>' +
+          '<div class="warning">&#x26A0;&#xFE0F; 请妥善保管此令牌，用于客户端连接</div>' +
+        '</div>';
+    })
+    .catch(function() {
+      document.getElementById('tokenContent').innerHTML = '<div class="log-empty">加载失败</div>';
+    });
+}
+
+function closeTokenModal() {
+  document.getElementById('tokenModal').classList.remove('active');
+}
+
+/* ── Create Tunnel ── */
+function openCreateModal() {
+  document.getElementById('createModal').classList.add('active');
+  document.getElementById('createFormArea').style.display = '';
+  document.getElementById('createResultArea').style.display = 'none';
+  document.getElementById('createSubmitBtn').style.display = '';
+  document.getElementById('cName').value = '';
+  document.getElementById('cToken').value = '';
+  document.getElementById('cDesc').value = '';
+  document.getElementById('cName').focus();
+}
+
+function closeCreateModal() {
+  document.getElementById('createModal').classList.remove('active');
+}
+
+function createTunnel() {
+  var name = document.getElementById('cName').value.trim();
+  var token = document.getElementById('cToken').value.trim();
+  var desc = document.getElementById('cDesc').value.trim();
+
+  if (!name) { showToast('请输入隧道名称', 'error'); return; }
+  if (token && token.length < 4) { showToast('自定义令牌长度至少 4 位', 'error'); return; }
+
+  var btn = document.getElementById('createSubmitBtn');
+  btn.disabled = true;
+  btn.textContent = '创建中...';
+
+  var payload = { name: name, description: desc };
+  if (token) payload.auth_token = token;
+
+  fetch('/api/tunnels', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    btn.disabled = false;
+    btn.textContent = '创建';
+    if (data.error) { showToast(data.error || '创建失败', 'error'); return; }
+    showToast('隧道创建成功', 'success');
+    fetchTunnels();
+    var tunnel = data.tunnel || data;
+    var token = tunnel.auth_token || tunnel.token || '';
+    document.getElementById('createFormArea').style.display = 'none';
+    btn.style.display = 'none';
+    var resultArea = document.getElementById('createResultArea');
+    resultArea.style.display = '';
+    resultArea.innerHTML =
+      '<div class="token-box">' +
+        '<div class="token-label">&#x1F512; 认证令牌</div>' +
+        '<div class="token-value"><code id="tokenCode">' + escapeHtml(token) + '</code>' +
+          '<button class="btn btn-primary btn-sm" onclick="copyText(document.getElementById(\'tokenCode\').textContent)">&#x1F4CB; 复制</button>' +
+        '</div>' +
+        '<div class="warning">&#x26A0;&#xFE0F; 请保存此认证令牌，关闭后将无法再次查看（可在列表中点击 "密钥" 查看）</div>' +
+      '</div>';
+  })
+  .catch(function() {
+    btn.disabled = false;
+    btn.textContent = '创建';
+    showToast('请求失败，请重试', 'error');
+  });
+}
+
+/* ── Delete Tunnel ── */
+var pendingDeleteId = null;
+function confirmDelete(id, name) {
+  pendingDeleteId = id;
+  document.getElementById('confirmName').textContent = name;
+  document.getElementById('confirmModal').classList.add('active');
+  document.getElementById('confirmDeleteBtn').onclick = function() { doDelete(); };
+}
+function closeConfirmModal() {
+  document.getElementById('confirmModal').classList.remove('active');
+  pendingDeleteId = null;
+}
+function doDelete() {
+  if (!pendingDeleteId) return;
+  fetch('/api/tunnels/' + pendingDeleteId, { method: 'DELETE' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      closeConfirmModal();
+      if (data.error) { showToast(data.error || '删除失败', 'error'); return; }
+      showToast('隧道已删除', 'success');
+      fetchTunnels();
+    })
+    .catch(function() {
+      closeConfirmModal();
+      showToast('请求失败', 'error');
+    });
+}
+
+/* ── Log Viewer ── */
+var logPollTimer = null;
+function openLogModal(id, name) {
+  document.getElementById('logModal').classList.add('active');
+  document.getElementById('logContent').innerHTML = '<div class="log-empty">加载中...</div>';
+  fetchLogs(id);
+  if (logPollTimer) clearInterval(logPollTimer);
+  logPollTimer = setInterval(function() { fetchLogs(id); }, 5000);
+  document.getElementById('logModal')._tunnelId = id;
+}
+function closeLogModal() {
+  document.getElementById('logModal').classList.remove('active');
+  if (logPollTimer) { clearInterval(logPollTimer); logPollTimer = null; }
+}
+function fetchLogs(id) {
+  fetch('/api/tunnels/' + id + '/logs')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var container = document.getElementById('logContent');
+      var logs = data.logs || data || [];
+      if (!Array.isArray(logs) || logs.length === 0) {
+        container.innerHTML = '<div class="log-empty">暂无日志</div>';
+        return;
+      }
+      var html = '';
+      logs.forEach(function(l) {
+        html += '<div class="log-line">' +
+          '<span class="log-time">' + escapeHtml(l.created_at || l.timestamp || '-') + '</span>' +
+          '<span class="log-action">' + escapeHtml(l.action || '-') + '</span>' +
+          '<span class="log-msg">' + escapeHtml(l.message || l.msg || '-') + '</span>' +
+        '</div>';
+      });
+      container.innerHTML = html;
+      container.scrollTop = container.scrollHeight;
+    })
+    .catch(function() {
+      document.getElementById('logContent').innerHTML = '<div class="log-empty">加载失败</div>';
+    });
+}
+
+/* ── Close modals on overlay click ── */
+document.querySelectorAll('.modal-overlay').forEach(function(overlay) {
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) {
+      overlay.classList.remove('active');
+      if (logPollTimer) { clearInterval(logPollTimer); logPollTimer = null; }
+    }
+  });
+});
+
+/* ── Close modals on Escape ── */
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.active').forEach(function(m) {
+      m.classList.remove('active');
+    });
+    if (logPollTimer) { clearInterval(logPollTimer); logPollTimer = null; }
+  }
+});
+
+/* ── SSL Certificate Management ── */
+var sslData = null;
+
+function fetchSslStatus() {
+  if (!isLoggedIn) return;
+  fetch('/api/ssl')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      sslData = data;
+      updateSslBadge(data);
+    })
+    .catch(function() {});
+}
+
+function updateSslBadge(data) {
+  var badge = document.getElementById('sslBadgeArea');
+  var label = document.getElementById('sslDaysLeft');
+  if (!badge || !label) return;
+
+  // Always show the SSL badge so users can click to configure
+  badge.style.display = '';
+
+  if (data.cert_exists && data.cert_days_left != null) {
+    var days = data.cert_days_left;
+    if (days > 30) {
+      label.textContent = days + ' 天';
+      label.style.color = 'var(--success)';
+    } else if (days > 7) {
+      label.textContent = days + ' 天';
+      label.style.color = 'var(--warning)';
+    } else {
+      label.textContent = days + ' 天!';
+      label.style.color = 'var(--danger)';
+    }
+  } else {
+    label.textContent = '未配置';
+    label.style.color = 'var(--text-muted)';
+  }
+}
+
+function openSslModal() {
+  document.getElementById('sslModal').classList.add('active');
+  document.getElementById('sslModalBody').innerHTML = '<div class="log-empty">加载中...</div>';
+  fetch('/api/ssl')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      sslData = data;
+      renderSslModal(data);
+    })
+    .catch(function() {
+      document.getElementById('sslModalBody').innerHTML = '<div class="log-empty">加载失败</div>';
+    });
+}
+
+function closeSslModal() {
+  document.getElementById('sslModal').classList.remove('active');
+}
+
+function renderSslModal(data) {
+  var body = document.getElementById('sslModalBody');
+  var actions = document.getElementById('sslModalActions');
+
+  var html = '';
+
+  // Certificate Status Section
+  html += '<div style="margin-bottom:20px">';
+  html += '<h4 style="font-size:14px;font-weight:700;margin-bottom:10px;color:var(--text)">&#x1F4CB; 证书状态</h4>';
+
+  if (data.cert_exists) {
+    var days = data.cert_days_left || 0;
+    var statusColor = days > 30 ? 'var(--success)' : (days > 7 ? 'var(--warning)' : 'var(--danger)');
+    var statusBg = days > 30 ? 'var(--success-light)' : (days > 7 ? 'var(--warning-light)' : 'var(--danger-light)');
+    var statusText = days > 30 ? '正常' : (days > 7 ? '即将过期' : '即将过期!');
+
+    html += '<div style="background:' + statusBg + ';border:1px solid ' + statusColor + ';border-radius:var(--radius);padding:14px;margin-bottom:12px">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
+    html += '<span style="font-weight:700;color:' + statusColor + ';font-size:15px">' + statusText + '</span>';
+    html += '<span style="font-size:28px;font-weight:800;color:' + statusColor + '">' + days + ' <span style="font-size:14px;font-weight:400">天</span></span>';
+    html += '</div>';
+    if (data.cert_subject) {
+      html += '<div style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono)">' + escapeHtml(data.cert_subject) + '</div>';
+    }
+    if (data.cert_not_after) {
+      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">到期时间: ' + escapeHtml(data.cert_not_after) + '</div>';
+    }
+    if (data.cert_not_before) {
+      html += '<div style="font-size:12px;color:var(--text-muted)">签发时间: ' + escapeHtml(data.cert_not_before) + '</div>';
+    }
+    html += '</div>';
+  } else {
+    html += '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px;text-align:center">';
+    html += '<div style="color:var(--text-muted);font-size:13px">暂无证书文件</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Last Renew Log
+  if (data.last_renew) {
+    html += '<div style="margin-bottom:16px;font-size:12px;color:var(--text-muted)">上次续证: ' + escapeHtml(data.last_renew) + '</div>';
+  }
+
+  // AccessKey Config Section
+  html += '<div style="margin-bottom:20px">';
+  html += '<h4 style="font-size:14px;font-weight:700;margin-bottom:10px;color:var(--text)">&#x1F511; 阿里云 DNS API 配置</h4>';
+  html += '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">配置阿里云 AccessKey 后，可一键自动续证泛域名证书（通过 DNS-01 验证）</p>';
+
+  var savedKey = data.ali_key_set ? data.ali_key_mask : '';
+  html += '<div class="form-group">';
+  html += '<label>域名</label>';
+  html += '<input type="text" id="sslDomain" value="' + escapeHtml(data.domain || 'tunnel.aicq.online') + '" placeholder="例如: tunnel.aicq.online">';
+  html += '</div>';
+
+  html += '<div class="form-group">';
+  html += '<label>AccessKey ID ' + (savedKey ? '<span style="font-weight:400;color:var(--success)">（已配置: ' + escapeHtml(savedKey) + '）</span>' : '') + '</label>';
+  html += '<input type="text" id="sslAliKey" placeholder="LTAI..." ' + (savedKey ? 'value=""' : '') + '>';
+  html += '</div>';
+
+  html += '<div class="form-group">';
+  html += '<label>AccessKey Secret</label>';
+  html += '<input type="password" id="sslAliSecret" placeholder="' + (savedKey ? '留空保持不变' : '输入 Secret') + '">';
+  html += '</div>';
+  html += '</div>';
+
+  body.innerHTML = html;
+
+  // Update actions
+  actions.innerHTML =
+    '<button class="btn btn-ghost" onclick="closeSslModal()">关闭</button>' +
+    '<button class="btn btn-primary" onclick="saveSslConfig()">&#x1F4BE; 保存配置</button>' +
+    (data.ali_key_set ? '<button class="btn btn-primary" style="background:var(--success)" onclick="renewSslCert()" id="renewBtn">&#x1F504; 一键续证</button>' : '');
+}
+
+function saveSslConfig() {
+  var domain = document.getElementById('sslDomain').value.trim();
+  var aliKey = document.getElementById('sslAliKey').value.trim();
+  var aliSecret = document.getElementById('sslAliSecret').value.trim();
+
+  if (!domain) { showToast('请输入域名', 'error'); return; }
+  if (!aliKey && !sslData.ali_key_set) { showToast('请输入 AccessKey ID', 'error'); return; }
+  if (!aliSecret && !sslData.ali_key_set) { showToast('请输入 AccessKey Secret', 'error'); return; }
+
+  var payload = { domain: domain };
+  if (aliKey) payload.ali_key = aliKey;
+  if (aliSecret) payload.ali_secret = aliSecret;
+
+  fetch('/api/ssl/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) { showToast(data.error, 'error'); return; }
+    showToast('配置保存成功', 'success');
+    // Refresh the modal
+    openSslModal();
+    fetchSslStatus();
+  })
+  .catch(function() { showToast('保存失败', 'error'); });
+}
+
+function renewSslCert() {
+  var btn = document.getElementById('renewBtn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ 续证中...';
+
+  // Show progress in modal body
+  var body = document.getElementById('sslModalBody');
+  var progressDiv = document.createElement('div');
+  progressDiv.id = 'renewProgress';
+  progressDiv.style.cssText = 'margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-family:var(--font-mono);font-size:12px;max-height:200px;overflow-y:auto;white-space:pre-wrap;color:var(--text-secondary)';
+  progressDiv.textContent = '正在续证，请稍候...\n这可能需要 1-2 分钟\n';
+  body.appendChild(progressDiv);
+
+  fetch('/api/ssl/renew', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      btn.disabled = false;
+      btn.textContent = '🔄 一键续证';
+
+      var prog = document.getElementById('renewProgress');
+      if (data.success) {
+        showToast('证书续期成功! 剩余 ' + (data.days_left || '?') + ' 天', 'success');
+        if (prog) {
+          prog.textContent = '续证成功!\n新证书到期: ' + (data.not_after || '未知') + '\n剩余天数: ' + (data.days_left || '?');
+          prog.style.color = 'var(--success)';
+        }
+        fetchSslStatus();
+        // Refresh modal after 2s
+        setTimeout(function() { openSslModal(); }, 2000);
+      } else {
+        showToast(data.error || '续证失败', 'error');
+        if (prog) {
+          prog.textContent = '续证失败\n' + (data.output || data.error || '未知错误');
+          prog.style.color = 'var(--danger)';
+        }
+      }
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.textContent = '🔄 一键续证';
+      showToast('请求失败', 'error');
+    });
+}
+
+/* ── Init ── */
+checkAuth();
+</script>
+</body>
+</html>
