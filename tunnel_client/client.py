@@ -811,7 +811,10 @@ class TunnelClient:
         body = base64.b64decode(body_b64) if body_b64 else None
 
         target = f"http://{self.local_host}:{self.local_port}{url_path}"
-        prefix = f"/{self._tunnel_code}" if self._tunnel_code else ""
+        # routing_mode: relay(中继，需路径重写) / subdomain(子域名，无需重写) / http_port(HTTP端口，无需重写)
+        routing_mode = data.get("routing_mode", "relay")
+        needs_rewrite = (routing_mode == "relay")
+        prefix = f"/{self._tunnel_code}" if (self._tunnel_code and needs_rewrite) else ""
 
         try:
             # 使用更长的超时（600秒），匹配服务端超时
@@ -824,9 +827,8 @@ class TunnelClient:
                     if k.lower() not in ("transfer-encoding", "connection")
                 }
 
-                # ---- 路径重写 (仅在路径前缀模式下) ----
-                # HTTP 独立端口模式（http_port_mode=True）下，请求直接透传，无需重写
-                if prefix and not self.http_port_mode:
+                # ---- 路径重写 (仅在中继模式下需要，子域名/HTTP端口模式直接透传) ----
+                if prefix:
                     ct = resp_headers.get("Content-Type", "").lower()
                     status = resp.status
 

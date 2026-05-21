@@ -496,6 +496,7 @@ async def _start_http_port_listener(code: str, public_port: int, local_port: int
                 "url": url_path,
                 "headers": headers,
                 "body": body_b64,
+                "routing_mode": "http_port"
             })
 
             # 等待响应
@@ -703,6 +704,7 @@ async def _start_subdomain_listener():
                 "url": url_path,
                 "headers": headers,
                 "body": body_b64,
+                "routing_mode": "subdomain"
             })
 
             # 等待响应
@@ -1850,8 +1852,8 @@ async def tunnel_request_handler(request: web.Request) -> web.Response:
             "url": sub_path,
             "headers": headers,
             "body": body_b64,
+            "routing_mode": "relay"
         })
-
         # 等待响应（600 秒超时，支持长任务如模型训练/下载）
         try:
             resp_data = await asyncio.wait_for(future, timeout=600)
