@@ -584,7 +584,7 @@ class TunnelClient:
         base = self.server if self.server.startswith("http") else f"http://{self.server}"
         ws_url = base.replace("http", "ws") + f"/ws?key={self.key}"
 
-        async with self.session.ws_connect(ws_url, compress=True) as ws:
+        async with self.session.ws_connect(ws_url, compress=0) as ws:
             self.ws = ws
             self.retry_count = 0
             print("  [连接中]...")
