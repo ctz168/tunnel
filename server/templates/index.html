@@ -103,6 +103,7 @@
   /* ── Tags / Badges ── */
   .tag{display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:5px;letter-spacing:.2px}
   .tag-relay{background:var(--info-light);color:var(--info)}
+  .tag-proxy{background:var(--info-light);color:var(--info)}
   .tag-p2p{background:var(--success-light);color:var(--success)}
   .tag-ipv6{background:#E8F5E9;color:#2E7D32}
   .tag-upnp{background:#E3F2FD;color:#1565C0}
@@ -758,7 +759,7 @@ function renderTunnels() {
     if (p2pUrl) {
       urls.push({url: p2pUrl, label: 'P2P直连', tag: 'p2p'});
     }
-    urls.push({url: relayUrl, label: '中继', tag: 'relay'});
+    urls.push({url: relayUrl, label: '代理网址', tag: 'relay'});
 
     var primaryUrl = urls[0].url;
     var escapedPrimaryUrl = escapeHtml(primaryUrl).replace(/'/g, "\\'");
@@ -767,7 +768,7 @@ function renderTunnels() {
     var addrHtml = '<div class="public-url" style="flex-direction:column;align-items:flex-start;gap:4px">';
     urls.forEach(function(u, i) {
       var escapedU = escapeHtml(u.url).replace(/'/g, "\\'");
-      var tagClass = u.tag === 'subdomain' ? 'tag-subdomain' : (u.tag === 'httpport' ? 'tag-httpport' : (u.tag === 'tcp' ? 'tag-tcp' : (u.tag === 'p2p' ? 'tag-p2p' : 'tag-relay')));
+      var tagClass = u.tag === 'subdomain' ? 'tag-subdomain' : (u.tag === 'httpport' ? 'tag-httpport' : (u.tag === 'tcp' ? 'tag-tcp' : (u.tag === 'p2p' ? 'tag-p2p' : 'tag-proxy')));
       var tagLabel = u.label;
       addrHtml += '<div style="display:flex;align-items:center;gap:6px;width:100%">';
       addrHtml += '<span class="tag ' + tagClass + '" style="flex-shrink:0;min-width:56px;text-align:center">' + tagLabel + '</span>';
@@ -791,14 +792,19 @@ function renderTunnels() {
     } else if (p2pMode) {
       p2pBadge = '<span class="tag tag-p2p">P2P</span>';
     }
-    var relayTag = online && !p2pMode ? '<span class="tag tag-relay">中继</span>' : '';
+    var relayTag = online && !p2pMode ? '<span class="tag tag-relay">服务器中转</span>' : '';
 
-    // Traffic info line
+    // 传输通道信息（P2P直连 vs 服务器中转）
     var trafficModeLine = '';
     if (p2pBadge) {
-      trafficModeLine = '<span style="font-size:11px;color:var(--success)">P2P 直连</span>';
+      var p2pModeText = '';
+      if (p2pInfo && p2pInfo.mode) {
+        var modeTexts = {'ipv6': 'IPv6直连', 'upnp': 'UPnP IPv4', 'dual': 'IPv6+UPnP'};
+        p2pModeText = modeTexts[p2pInfo.mode] || p2pInfo.mode;
+      }
+      trafficModeLine = '<span style="font-size:11px;color:var(--success)">P2P直连' + (p2pModeText ? ' (' + p2pModeText + ')' : '') + '</span>';
     } else if (online) {
-      trafficModeLine = '<span style="font-size:11px;color:var(--text-muted)">服务端中继</span>';
+      trafficModeLine = '<span style="font-size:11px;color:var(--text-muted)">服务器中转</span>';
     }
 
     var escapedName = escapeHtml(t.name || '-');

@@ -836,7 +836,7 @@ _DEFAULT_HTML = """<!DOCTYPE html>
     <ol>
       <li>通过管理面板创建一个隧道，获取 <b>隧道编码</b> 和 <b>认证令牌</b></li>
       <li>在本地运行 Tunnel 客户端，使用令牌连接服务端</li>
-      <li>访问 <code>http://域名/隧道编码/</code> 即可访问本地服务</li>
+      <li>访问 <code>http://域名/隧道编码/</code> 即可通过代理网址访问本地服务</li>
     </ol>
   </div>
   <p class="footer">Powered by Tunnel &copy; 2025</p>
@@ -1233,7 +1233,7 @@ async def get_tunnel_status_handler(request: web.Request) -> web.Response:
     返回每种暴露公网地址:
       - subdomain_url: xxx.tunnel.aicq.online (子域名模式)
       - http_url: aicq.online:端口号 (HTTP独立端口模式)
-      - relay_url: aicq.online:7739/编码 (中继模式，始终存在)
+      - relay_url: aicq.online:7739/编码 (代理网址，始终存在)
     """
     domain = await _get_server_domain()
     domain_host = domain.split(":")[0] if ":" in domain else domain
@@ -1248,7 +1248,7 @@ async def get_tunnel_status_handler(request: web.Request) -> web.Response:
                 "bytes_in": meta.get("bytes_in", 0),
                 "bytes_out": meta.get("bytes_out", 0),
                 "request_count": meta.get("request_count", 0),
-                "relay_url": f"http://{domain}/{code}",
+                "relay_url": f"http://{domain}/{code}",  # 代理网址（原名中继）
             }
             # 子域名地址
             sd_svc = subdomain_services.get(code)

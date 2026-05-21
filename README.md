@@ -1,6 +1,6 @@
 # Tunnel
 
-类似 ngrok 的内网穿透服务，支持 IPv6/IPv4 P2P 直连与服务端中继双模式。
+类似 ngrok 的内网穿透服务，支持 IPv6/IPv4 P2P 直连与服务器中转双模式。
 
 将本地服务暴露到公网，通过固定域名访问，无需公网 IP。
 
@@ -18,7 +18,7 @@ pip install tunnel-p2p-client
 tunnel-p2p-client --key YOUR_TOKEN --port 8080
 ```
 
-连接成功后，你会得到一个公网地址，例如 `http://aicq.online:7739/EAH3WR2X`，任何人都可以通过这个地址访问你本地的 8080 端口服务。
+连接成功后，你会得到一个代理网址，例如 `http://aicq.online:7739/EAH3WR2X`，任何人都可以通过这个地址访问你本地的 8080 端口服务。
 
 ## 客户端参数
 
@@ -29,7 +29,7 @@ tunnel-p2p-client --key YOUR_TOKEN --port 8080
 | `-s, --server` | 服务器地址 | aicq.online:7739 |
 | `--host` | 本地服务地址 | localhost |
 | `--p2p-port` | P2P 直连监听端口 | 与 --port 相同 |
-| `--no-p2p` | 禁用 P2P，强制使用中继模式 | false |
+| `--no-p2p` | 禁用 P2P 直连，强制使用服务器中转 | false |
 | `--tcp-ports` | TCP 转发端口，逗号分隔（如 `22,3306`） | - |
 | `--http-port` | HTTP 独立端口模式 | false |
 | `--subdomain` | 子域名前缀（如 `myagent`） | - |
@@ -48,7 +48,7 @@ tunnel-p2p-client -k YOUR_TOKEN -p 3000 --http-port
 # 指定自定义服务器
 tunnel-p2p-client -k YOUR_TOKEN -p 80 -s your-server.com:7739
 
-# 强制使用中继模式（禁用 P2P）
+# 强制使用服务器中转（禁用 P2P）
 tunnel-p2p-client -k YOUR_TOKEN -p 8080 --no-p2p
 ```
 
@@ -95,7 +95,7 @@ tunnel-p2p-client -k YOUR_TOKEN -p 8768 --subdomain myagent
 ```
 此时需要换一个子域名前缀。如果占用者已离线，系统会自动释放子域名供新连接使用。
 
-## P2P 模式
+## P2P 直连模式
 
 默认启用，自动按优先级选择最佳连接方式：
 
@@ -103,13 +103,23 @@ tunnel-p2p-client -k YOUR_TOKEN -p 8768 --subdomain myagent
 |--------|------|------|
 | 1 | **IPv6 直连** | 公网 IPv6 无 NAT，直接连接，延迟最低 |
 | 2 | **UPnP IPv4** | 路由器自动端口映射，非 CGNAT 环境可用 |
-| 3 | **中继模式** | 流量经服务器转发，任何网络环境都可用 |
+| 3 | **服务器中转** | 流量经服务器转发，任何网络环境都可用 |
 
 P2P 直连成功后，访问者的流量**不经过服务器**，直接连接到你的机器，降低服务器负载。
 
+管理后台会实时显示当前传输通道状态（P2P直连 / 服务器中转），方便了解连接质量。
+
+## 代理网址模式
+
+代理网址是默认的访问方式，连接成功后服务端会分配一个形如 `http://域名/隧道编码/` 的地址。
+
+由于该地址包含路径前缀，客户端会自动对 HTML/CSS/JS 中的绝对路径进行重写，确保被代理的 Web 应用无需修改即可正常工作。
+
+> **推荐**：如果对路径重写有顾虑，建议使用子域名模式或 HTTP 独立端口模式，这两种模式无需任何路径重写。
+
 ## HTTP 独立端口模式
 
-路径前缀模式（`domain:7739/TUNNEL_CODE/`）需要对 HTML/CSS/JS/重定向等做大量路径重写，容易出现遗漏导致资源加载失败。
+路径前缀模式（代理网址 `domain:7739/TUNNEL_CODE/`）需要对 HTML/CSS/JS/重定向等做路径重写，可能出现遗漏导致资源加载失败。
 
 **HTTP 独立端口模式**为每个隧道分配独立的 HTTP 公网端口（如 `aicq.online:7900`），访问者直接访问该端口，**无需任何路径重写**，彻底解决地址问题。
 
@@ -261,7 +271,7 @@ export TCP_PORT_END=7899
 
 ## 三种 HTTP 访问模式对比
 
-| 特性 | 子域名模式 | HTTP 独立端口 | 路径前缀 |
+| 特性 | 子域名模式 | HTTP 独立端口 | 代理网址（路径前缀） |
 |------|-----------|-------------|---------|
 | 访问地址 | `http://myapp.tunnel.aicq.online` | `http://aicq.online:7900` | `http://aicq.online:7739/XXXXXXXX/` |
 | 端口号 | 80（默认） | 非标准端口 | 7739 |
@@ -316,7 +326,7 @@ sudo passwd root
 # 安装 Python 和 pip（如果还没有）
 sudo apt install python3 python3-pip -y
 
-# 安装隧道客户端（v2.7.0+）
+# 安装隧道客户端（v2.9.0+）
 pip install tunnel-p2p-client --break-system-packages
 ```
 
@@ -329,7 +339,7 @@ tunnel-p2p-client --key YOUR_TOKEN --port 8080 --tcp-ports 22
 启动成功后会显示：
 
 ```
-Tunnel Client v2.7.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)
+Tunnel Client v2.9.0 (IPv6/IPv4 P2P + 服务器中转 + HTTP-Port + TCP + Subdomain)
 [OK] 隧道已建立
 [OK] 隧道编码: XXXXXXXX
 [TCP] tcp-22 -> localhost:22 (公网端口: 7800)
@@ -430,7 +440,7 @@ ssh -p 8022 root@127.0.0.1
 # 安装 Python 和 pip（如果还没有）
 apt install python3 python3-pip -y
 
-# 安装隧道客户端（v2.7.0+）
+# 安装隧道客户端（v2.9.0+）
 pip install tunnel-p2p-client --break-system-packages
 ```
 
@@ -443,7 +453,7 @@ tunnel-p2p-client --key YOUR_TOKEN --port 12345 --tcp-ports 8022
 启动成功后会显示：
 
 ```
-Tunnel Client v2.7.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)
+Tunnel Client v2.9.0 (IPv6/IPv4 P2P + 服务器中转 + HTTP-Port + TCP + Subdomain)
 [OK] 隧道已建立
 [OK] 隧道编码: XXXXXXXX
 [TCP] tcp-8022 -> localhost:8022 (公网端口: 7800)

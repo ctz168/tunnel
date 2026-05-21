@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Tunnel Client - 内网穿透客户端 (Python + aiohttp)
-支持 IPv6/IPv4 P2P 直连 + 服务端中继双模式
+支持 IPv6/IPv4 P2P 直连 + 服务器中转双模式
 
-P2P 策略 (优先级):
+传输策略 (优先级，默认自动尝试):
   1. IPv6 直连 — 公网 IPv6 无 NAT，直接可达
   2. UPnP IPv4 — 路由器端口映射，适用于非 CGNAT 环境
-  3. 中继模式   — 所有流量经服务端转发 (保底)
+  3. 服务器中转 — 所有流量经服务器转发 (保底)
 
 用法:
   pip install tunnel-p2p-client
@@ -454,7 +454,7 @@ class TunnelClient:
         self._p2p_ok = False
         self._public_ip = ""
         self._tunnel_code = ""
-        # P2P 模式: "ipv6" | "upnp" | "dual" | "relay"
+        # 传输通道: "ipv6" | "upnp" | "dual" | "relay"
         self._p2p_mode = "relay"
         self._upnp_opened = False
         # ---- TCP 隧道状态 ----
@@ -468,11 +468,11 @@ class TunnelClient:
         self._subdomain_info: dict | None = None  # {"subdomain", "local_port", "subdomain_url"}
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.8.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)")
-        print(f"  服务器:   {self.server}")
-        print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
-        print(f"  本地:     {self.local_host}:{self.local_port}")
-        print(f"  P2P:      {'启用 (端口 ' + str(self.p2p_port) + ')' if self.p2p else '禁用'}")
+        print(f"\n  Tunnel Client v2.9.0 (IPv6/IPv4 P2P + 服务器中转 + HTTP-Port + TCP + Subdomain)")
+        print(f"  服务器:     {self.server}")
+        print(f"  密钥:       {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
+        print(f"  本地:       {self.local_host}:{self.local_port}")
+        print(f"  P2P直连:    {'自动 (端口 ' + str(self.p2p_port) + ')' if self.p2p else '禁用 (--no-p2p)'}")
         if self.tcp_ports:
             print(f"  TCP转发:  {self.tcp_ports}")
         if self.subdomain:
@@ -530,7 +530,7 @@ class TunnelClient:
             self._public_ip = data.get("client_ip", "")
             print(f"  [OK] 隧道已建立")
             print(f"  [OK] 隧道编码: {self._tunnel_code}")
-            print(f"  [OK] 中继地址: {url}")
+            print(f"  [OK] 代理网址: {url}")
 
             # 上报客户端本地信息
             if self.ws and not self.ws.closed:
@@ -588,7 +588,7 @@ class TunnelClient:
                     pass
 
         elif t == "request":
-            # 中继模式：用独立任务处理转发请求，不阻塞消息循环
+            # 服务器中转模式：用独立任务处理转发请求，不阻塞消息循环
             # 这样心跳 pong 不会被长时间代理请求阻塞
             asyncio.create_task(self._proxy_request_safe(data))
 
@@ -643,7 +643,7 @@ class TunnelClient:
         尝试 P2P 直连，策略:
         1. IPv6 直连 (优先) — 公网 IPv6 无 NAT，成功率高
         2. UPnP IPv4 — 路由器端口映射
-        3. 两者都失败 → 中继模式
+        3. 两者都失败 → 服务器中转
         """
         local_ip = get_local_ip()
         desc = f"Tunnel-{self._tunnel_code or self.key[:8]}"
@@ -721,7 +721,7 @@ class TunnelClient:
                 self._upnp_opened = True
                 print(f"  [P2P] UPnP IPv4 额外映射成功: {ipv4_url}")
             else:
-                print(f"  [P2P] UPnP IPv4 额外映射失败 (纯 IPv4 访问者将使用中继)")
+                print(f"  [P2P] UPnP IPv4 额外映射失败 (纯 IPv4 访问者将通过服务器中转)")
 
         # ---- 汇总上报 ----
         p2p_urls = []
@@ -750,10 +750,10 @@ class TunnelClient:
             })
 
         if not self._p2p_ok:
-            print(f"  [P2P] 直连均失败，使用中继模式 (所有流量经服务器转发)")
+            print(f"  [传输] P2P 直连均失败，回退为服务器中转 (所有流量经服务器转发)")
         else:
             mode_labels = {"ipv6": "IPv6 直连", "upnp": "UPnP IPv4", "dual": "IPv6 + UPnP 双栈"}
-            print(f"  [P2P] 模式: {mode_labels.get(self._p2p_mode, self._p2p_mode)}")
+            print(f"  [传输] 通道: P2P直连 ({mode_labels.get(self._p2p_mode, self._p2p_mode)})")
 
     async def _stop_p2p(self):
         """清理 P2P 资源"""
@@ -787,7 +787,7 @@ class TunnelClient:
                 pass
 
     async def _proxy_request(self, data: dict):
-        """中继模式：通过 WebSocket 转发 HTTP 请求，并重写响应中的绝对路径。
+        """代理网址模式：通过 WebSocket 转发 HTTP 请求，并重写响应中的绝对路径。
 
         当通过 http://tunnel-server/TUNNEL_CODE/ 访问时，浏览器会把
         HTML 中的绝对路径 /api/... /css/... 解析为
@@ -811,7 +811,7 @@ class TunnelClient:
         body = base64.b64decode(body_b64) if body_b64 else None
 
         target = f"http://{self.local_host}:{self.local_port}{url_path}"
-        # routing_mode: relay(中继，需路径重写) / subdomain(子域名，无需重写) / http_port(HTTP端口，无需重写)
+        # routing_mode: relay(代理网址，需路径重写) / subdomain(子域名，无需重写) / http_port(HTTP端口，无需重写)
         routing_mode = data.get("routing_mode", "relay")
         needs_rewrite = (routing_mode == "relay")
         prefix = f"/{self._tunnel_code}" if (self._tunnel_code and needs_rewrite) else ""
@@ -827,7 +827,7 @@ class TunnelClient:
                     if k.lower() not in ("transfer-encoding", "connection")
                 }
 
-                # ---- 路径重写 (仅在中继模式下需要，子域名/HTTP端口模式直接透传) ----
+                # ---- 路径重写 (仅在代理网址模式下需要，子域名/HTTP端口模式直接透传) ----
                 if prefix:
                     ct = resp_headers.get("Content-Type", "").lower()
                     status = resp.status
@@ -1054,9 +1054,9 @@ def main():
   tunnel-p2p-client -k YOUR_TOKEN -p 8080 --subdomain myagent  子域名模式（推荐）
 
 P2P 模式 (默认启用):
-  优先级: IPv6 直连 > UPnP IPv4 > 中继
+  优先级: IPv6 直连 > UPnP IPv4 > 服务器中转
   --p2p-port  指定 P2P 监听端口 (默认与本地端口相同)
-  --no-p2p     强制禁用 P2P，仅使用中继
+  --no-p2p     强制禁用 P2P 直连，仅使用服务器中转
 
 TCP 转发:
   --tcp-ports  逗号分隔的本地 TCP 端口，服务端会为每个端口分配公网端口
@@ -1078,7 +1078,7 @@ HTTP 独立端口模式:
     parser.add_argument("-s", "--server", default="aicq.online:7739", help="服务器地址 (默认: aicq.online:7739)")
     parser.add_argument("--host", default="localhost", help="本地服务地址 (默认: localhost)")
     parser.add_argument("--p2p-port", type=int, default=0, help="P2P 监听端口 (默认: 与本地端口相同)")
-    parser.add_argument("--no-p2p", action="store_true", help="禁用 P2P，强制使用中继模式")
+    parser.add_argument("--no-p2p", action="store_true", help="禁用 P2P 直连，强制使用服务器中转模式")
     parser.add_argument("--tcp-ports", default="", help="TCP 转发端口，逗号分隔 (如: 22,3306)")
     parser.add_argument("--http-port", action="store_true", help="启用 HTTP 独立端口模式")
     parser.add_argument("--subdomain", default="", help="子域名前缀 (如: myagent -> http://myagent.tunnel.aicq.online)")
