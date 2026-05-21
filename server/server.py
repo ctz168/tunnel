@@ -1331,7 +1331,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     GET /ws?key=<auth_token 或 tunnel_code>
     隧道客户端通过此 WebSocket 连接到服务端，接收转发请求并返回响应。
     """
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse(compress=False)
     await ws.prepare(request)
 
     # ---- 验证连接密钥 ----
