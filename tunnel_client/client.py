@@ -436,10 +436,15 @@ class P2PProxy:
         self.session: aiohttp.ClientSession | None = None
 
     async def start(self):
+        def _nodelay_socket_factory(info):
+            """创建启用了 TCP_NODELAY 的 socket，禁用 Nagle 算法以降低延迟"""
+            sock = socket.socket(info[0], info[1], info[2])
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            return sock
+
         connector = aiohttp.TCPConnector(
-            tcp_nodelay=True,
-            enable_compression=True,
             force_close=False,
+            socket_factory=_nodelay_socket_factory,
         )
         self.session = aiohttp.ClientSession(connector=connector)
         app = web.Application()
@@ -545,12 +550,17 @@ class TunnelClient:
             print(f"  子域名:   {self.subdomain}")
         print()
 
+        def _nodelay_socket_factory(info):
+            """创建启用了 TCP_NODELAY 的 socket，禁用 Nagle 算法以降低延迟"""
+            sock = socket.socket(info[0], info[1], info[2])
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            return sock
+
         connector = aiohttp.TCPConnector(
-            tcp_nodelay=True,  # Disable Nagle's algorithm for lower latency
-            enable_compression=True,  # Enable compression
             force_close=False,  # Reuse connections
             limit=100,  # Connection pool limit
             limit_per_host=20,
+            socket_factory=_nodelay_socket_factory,  # TCP_NODELAY for lower latency
         )
         timeout = aiohttp.ClientTimeout(total=600, connect=10)
         self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
