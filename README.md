@@ -31,18 +31,18 @@ tunnel-p2p-client --key YOUR_TOKEN --port 8080
 | `--p2p-port` | P2P 直连监听端口 | 与 --port 相同 |
 | `--no-p2p` | 禁用 P2P，强制使用中继模式 | false |
 | `--tcp-ports` | TCP 转发端口，逗号分隔（如 `22,3306`） | - |
-| `--http-port` | HTTP 独立端口模式（推荐，避免路径重写问题） | false |
+| `--http-port` | HTTP 独立端口模式 | false |
+| `--subdomain` | 子域名前缀（如 `myagent`） | - |
 
 ### 使用示例
 
 ```bash
-# 将本地 3000 端口暴露到公网
-# 默认路径前缀模式: http://aicq.online:7739/TUNNEL_CODE/
-tunnel-p2p-client -k YOUR_TOKEN -p 3000
+# 子域名模式（推荐！）
+# 映射到 http://myagent.tunnel.aicq.online，直接通过域名访问
+tunnel-p2p-client -k YOUR_TOKEN -p 8080 --subdomain myagent
 
-# HTTP 独立端口模式（推荐！）
+# HTTP 独立端口模式
 # 每个隧道分配独立端口，如 http://aicq.online:7900
-# 无路径前缀，不需要任何重写，彻底避免地址问题
 tunnel-p2p-client -k YOUR_TOKEN -p 3000 --http-port
 
 # 指定自定义服务器
@@ -51,6 +51,49 @@ tunnel-p2p-client -k YOUR_TOKEN -p 80 -s your-server.com:7739
 # 强制使用中继模式（禁用 P2P）
 tunnel-p2p-client -k YOUR_TOKEN -p 8080 --no-p2p
 ```
+
+## 子域名模式（推荐）
+
+子域名模式是最优雅的内网穿透方式，通过三级域名直接访问本地服务，无需端口号、无需路径前缀。
+
+### 原理
+
+- `*.tunnel.aicq.online` 的 DNS 已通配解析到服务器 IP
+- 服务端在 7740 端口监听子域名路由请求（Caddy/Nginx 反向代理到此端口）
+- 根据请求的 HTTP Host 头自动匹配子域名，转发到对应的隧道客户端
+- 客户端指定子域名前缀（如 `myagent`），服务端自动注册
+
+### 使用方法
+
+```bash
+# 将本地 8768 端口映射到 http://myagent.tunnel.aicq.online
+tunnel-p2p-client -k YOUR_TOKEN -p 8768 --subdomain myagent
+```
+
+启动后会显示：
+```
+[OK] 隧道已建立
+[OK] 隧道编码: XXXXXXXX
+[子域名] localhost:8768 -> http://myagent.tunnel.aicq.online
+```
+
+访问 `http://myagent.tunnel.aicq.online` 即可直接使用本地服务。
+
+### 子域名规则
+
+- 只能包含小写字母、数字和连字符
+- 长度 3-63 个字符
+- 不能以连字符开头或结尾
+- 保留名称（www, api, admin, mail, ftp, ns, dns, mx）不可使用
+- 如果子域名已被其他在线隧道占用，会收到错误提示
+
+### 冲突处理
+
+如果请求的子域名已被其他隧道占用：
+```
+[子域名] 注册失败: 子域名 'myagent' 已被其他隧道占用
+```
+此时需要换一个子域名前缀。如果占用者已离线，系统会自动释放子域名供新连接使用。
 
 ## P2P 模式
 
@@ -64,7 +107,7 @@ tunnel-p2p-client -k YOUR_TOKEN -p 8080 --no-p2p
 
 P2P 直连成功后，访问者的流量**不经过服务器**，直接连接到你的机器，降低服务器负载。
 
-## HTTP 独立端口模式（推荐）
+## HTTP 独立端口模式
 
 路径前缀模式（`domain:7739/TUNNEL_CODE/`）需要对 HTML/CSS/JS/重定向等做大量路径重写，容易出现遗漏导致资源加载失败。
 
@@ -79,7 +122,6 @@ tunnel-p2p-client -k YOUR_TOKEN -p 8080 --http-port
 ```
 [OK] 隧道已建立
 [OK] 隧道编码: XXXXXXXX
-[OK] 中继地址: http://aicq.online:7739/XXXXXXXX
 [HTTP端口] localhost:8080 -> http://aicq.online:7900 (公网端口: 7900)
 ```
 
@@ -118,6 +160,54 @@ systemctl restart tunnel    # 重启
 systemctl status tunnel     # 查看状态
 journalctl -u tunnel -f     # 查看日志
 ```
+
+### 子域名路由配置
+
+子域名模式需要在服务端配置反向代理（Caddy/Nginx），将 `*.tunnel.aicq.online` 的流量转发到隧道服务器的子域名端口（默认 7740）。
+
+**Caddy 配置示例：**
+
+```caddyfile
+*.tunnel.aicq.online {
+    reverse_proxy localhost:7740
+}
+```
+
+**Nginx 配置示例：**
+
+```nginx
+server {
+    listen 80;
+    server_name *.tunnel.aicq.online;
+
+    location / {
+        proxy_pass http://127.0.0.1:7740;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 600s;
+    }
+}
+```
+
+**注意：** 反向代理必须透传 `Host` 头（子域名路由依赖此头部识别目标隧道）。
+
+### 服务端环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `SERVER_PORT` | 主服务端口 | 7739 |
+| `SUBDOMAIN_PORT` | 子域名路由端口 | 7740 |
+| `SUBDOMAIN_BASE` | 子域名基础域名 | tunnel.aicq.online |
+| `HTTP_PORT_START` | HTTP 独立端口起始 | 7900 |
+| `HTTP_PORT_END` | HTTP 独立端口结束 | 7999 |
+| `TCP_PORT_START` | TCP 端口起始 | 7800 |
+| `TCP_PORT_END` | TCP 端口结束 | 7899 |
+| `DB_PATH` | 数据库路径 | data/tunnel.db |
 
 ## 从源码运行
 
@@ -169,6 +259,16 @@ export TCP_PORT_END=7899
 
 确保服务器防火墙放行该端口范围。
 
+## 三种 HTTP 访问模式对比
+
+| 特性 | 子域名模式 | HTTP 独立端口 | 路径前缀 |
+|------|-----------|-------------|---------|
+| 访问地址 | `http://myapp.tunnel.aicq.online` | `http://aicq.online:7900` | `http://aicq.online:7739/XXXXXXXX/` |
+| 端口号 | 80（默认） | 非标准端口 | 7739 |
+| 路径重写 | 不需要 | 不需要 | 需要 |
+| 配置复杂度 | 需配置反向代理 | 无 | 无 |
+| 适用场景 | **生产环境（推荐）** | 快速测试 | 兼容旧版 |
+
 ---
 
 ## 纯 Ubuntu SSH 隧道部署指南
@@ -216,7 +316,7 @@ sudo passwd root
 # 安装 Python 和 pip（如果还没有）
 sudo apt install python3 python3-pip -y
 
-# 安装隧道客户端（v2.6.0+）
+# 安装隧道客户端（v2.7.0+）
 pip install tunnel-p2p-client --break-system-packages
 ```
 
@@ -229,7 +329,7 @@ tunnel-p2p-client --key YOUR_TOKEN --port 8080 --tcp-ports 22
 启动成功后会显示：
 
 ```
-Tunnel Client v2.6.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP)
+Tunnel Client v2.7.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)
 [OK] 隧道已建立
 [OK] 隧道编码: XXXXXXXX
 [TCP] tcp-22 -> localhost:22 (公网端口: 7800)
@@ -330,7 +430,7 @@ ssh -p 8022 root@127.0.0.1
 # 安装 Python 和 pip（如果还没有）
 apt install python3 python3-pip -y
 
-# 安装隧道客户端（v2.6.0+）
+# 安装隧道客户端（v2.7.0+）
 pip install tunnel-p2p-client --break-system-packages
 ```
 
@@ -343,7 +443,7 @@ tunnel-p2p-client --key YOUR_TOKEN --port 12345 --tcp-ports 8022
 启动成功后会显示：
 
 ```
-Tunnel Client v2.6.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP)
+Tunnel Client v2.7.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)
 [OK] 隧道已建立
 [OK] 隧道编码: XXXXXXXX
 [TCP] tcp-8022 -> localhost:8022 (公网端口: 7800)

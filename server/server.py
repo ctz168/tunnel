@@ -133,6 +133,24 @@ http_port_services: dict[str, dict] = {}
 # 下一个可用的 HTTP 端口
 _next_http_port: int = HTTP_PORT_START
 
+# ======================== 子域名路由模式 ========================
+# 子域名基础域名：客户端注册的子域名 {name}.tunnel.aicq.online
+# 服务端在独立端口 (SUBDOMAIN_PORT) 监听，由 Caddy/Nginx 反向代理过来
+SUBDOMAIN_PORT = int(os.environ.get("SUBDOMAIN_PORT", "7740"))
+SUBDOMAIN_BASE = os.environ.get("SUBDOMAIN_BASE", "tunnel.aicq.online")
+
+# 已注册的子域名: subdomain -> tunnel_code
+subdomain_map: dict[str, str] = {}
+
+# 子域名服务注册: code -> {"subdomain": "myagent", "local_port": 8768, "subdomain_url": "http://myagent.tunnel.aicq.online"}
+subdomain_services: dict[str, dict] = {}
+
+# 子域名监听器: web.AppRunner
+subdomain_runner: web.AppRunner | None = None
+
+# 子域名正则: 小写字母+数字+连字符，3-63字符，不能以连字符开头/结尾
+SUBDOMAIN_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
+
 
 # ======================== 工具函数 ========================
 
@@ -581,6 +599,211 @@ async def _cleanup_http_port_for_tunnel(code: str):
             await _stop_http_port_listener(port, release_port=False)
 
 
+# ======================== 子域名路由模式辅助函数 ========================
+
+def _validate_subdomain(name: str) -> tuple[bool, str]:
+    """验证子域名格式是否合法"""
+    if not name:
+        return False, "子域名不能为空"
+    if len(name) < 3:
+        return False, "子域名长度至少 3 个字符"
+    if len(name) > 63:
+        return False, "子域名长度不能超过 63 个字符"
+    if not SUBDOMAIN_RE.match(name):
+        return False, "子域名只能包含小写字母、数字和连字符，且不能以连字符开头或结尾"
+    # 保留名称
+    reserved = {"www", "api", "admin", "mail", "ftp", "ns", "dns", "mx"}
+    if name in reserved:
+        return False, f"子域名 '{name}' 是保留名称，不可使用"
+    return True, ""
+
+
+async def _start_subdomain_listener():
+    """启动子域名路由监听器
+
+    在 SUBDOMAIN_PORT 上启动一个独立的 aiohttp 应用，
+    通过 HTTP Host 头识别子域名，将请求转发到对应的隧道客户端。
+
+    架构: Caddy(80/443) -> reverse proxy -> localhost:SUBDOMAIN_PORT -> 隧道客户端
+    """
+    async def _subdomain_handler(request: web.Request) -> web.Response:
+        """子域名路由 HTTP 请求处理器
+
+        1. 从 Host 头提取子域名前缀 (如 myagent.tunnel.aicq.online -> myagent)
+        2. 在 subdomain_map 中查找对应的隧道 code
+        3. 通过 WebSocket 转发请求到隧道客户端
+        """
+        host = request.host  # e.g., "myagent.tunnel.aicq.online" or "myagent.tunnel.aicq.online:7740"
+        # 去掉端口部分
+        hostname = host.split(":")[0].lower() if host else ""
+
+        # 提取子域名前缀：hostname 应该是 {subdomain}.{SUBDOMAIN_BASE}
+        suffix = f".{SUBDOMAIN_BASE.lower()}"
+        subdomain = ""
+        if hostname.endswith(suffix):
+            subdomain = hostname[:-len(suffix)]
+        else:
+            # 可能是直接 IP 访问或域名不匹配
+            return web.json_response(
+                {"error": "Invalid host", "message": f"域名 {hostname} 不匹配子域名格式 *.{SUBDOMAIN_BASE}"},
+                status=404,
+            )
+
+        if not subdomain:
+            return web.json_response(
+                {"error": "Missing subdomain", "message": "缺少子域名前缀"},
+                status=404,
+            )
+
+        # 查找子域名对应的隧道
+        code = subdomain_map.get(subdomain)
+        if not code:
+            return web.json_response(
+                {"error": "Subdomain not found", "message": f"子域名 '{subdomain}' 未注册或已离线"},
+                status=404,
+            )
+
+        # 检查隧道是否在线
+        ws = active_tunnels.get(code)
+        if not ws or ws.closed:
+            return web.json_response(
+                {"error": "Tunnel offline", "message": f"子域名 '{subdomain}' 对应的隧道当前不在线"},
+                status=502,
+            )
+
+        # 构造请求路径（含 query string）— 透传，无需路径重写
+        url_path = request.path
+        if request.query_string:
+            url_path = f"{url_path}?{request.query_string}"
+
+        # 生成唯一请求 ID
+        req_id = f"{code}-sd-{uuid.uuid4().hex[:12]}"
+
+        # 创建 Future 等待客户端响应
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        pending_requests[req_id] = future
+
+        try:
+            # 读取请求体
+            body = await request.read()
+            body_b64 = base64.b64encode(body).decode("utf-8") if body else ""
+
+            # 收集请求头
+            headers = {}
+            for key, value in request.headers.items():
+                if key.lower() not in _HOP_BY_HOP:
+                    headers[key] = value
+
+            # 通过 WebSocket 发送给客户端
+            await ws.send_json({
+                "type": "request",
+                "id": req_id,
+                "method": request.method,
+                "url": url_path,
+                "headers": headers,
+                "body": body_b64,
+            })
+
+            # 等待响应
+            try:
+                resp_data = await asyncio.wait_for(future, timeout=600)
+            except asyncio.TimeoutError:
+                return web.json_response(
+                    {"error": "Gateway Timeout", "message": "隧道客户端响应超时 (600s)"},
+                    status=504,
+                )
+
+            # 解析响应
+            status_code = resp_data.get("status_code", 200)
+            resp_headers = resp_data.get("headers", {})
+            resp_body_b64 = resp_data.get("body", "")
+            resp_body = base64.b64decode(resp_body_b64) if resp_body_b64 else b""
+
+            # 更新统计
+            meta = tunnel_meta.get(code, {})
+            meta["bytes_in"] = meta.get("bytes_in", 0) + len(body)
+            meta["bytes_out"] = meta.get("bytes_out", 0) + len(resp_body)
+            meta["request_count"] = meta.get("request_count", 0) + 1
+
+            # 提取 Content-Type 并过滤响应头
+            content_type = "application/octet-stream"
+            charset = None
+            pass_headers: dict[str, str] = {}
+            for key, value in resp_headers.items():
+                lower = key.lower()
+                if lower == "content-type":
+                    ct_lower = value.lower()
+                    if "charset=" in ct_lower:
+                        parts = value.split(";", 1)
+                        content_type = parts[0].strip()
+                        for param in parts[1].split(";"):
+                            param = param.strip()
+                            if param.lower().startswith("charset="):
+                                charset = param.split("=", 1)[1].strip().strip('"')
+                                break
+                    else:
+                        content_type = value
+                elif lower not in ("transfer-encoding", "connection", "keep-alive", "content-length"):
+                    pass_headers[key] = value
+
+            return web.Response(
+                status=status_code,
+                body=resp_body,
+                content_type=content_type,
+                charset=charset,
+                headers=pass_headers if pass_headers else None,
+            )
+
+        except asyncio.CancelledError:
+            return web.json_response({"error": "Request cancelled"}, status=499)
+        except Exception as e:
+            logger.exception(f"子域名转发异常 [{subdomain} -> {code}]")
+            return web.json_response(
+                {"error": "Internal Server Error", "message": str(e)},
+                status=500,
+            )
+        finally:
+            pending_requests.pop(req_id, None)
+
+    # 创建子域名路由应用
+    app = web.Application(middlewares=[error_middleware])
+    app.router.add_route("*", "/{path_info:.*}", _subdomain_handler)
+    app.router.add_route("*", "/", _subdomain_handler)
+
+    global subdomain_runner
+    subdomain_runner = web.AppRunner(app)
+    await subdomain_runner.setup()
+
+    try:
+        site = web.TCPSite(subdomain_runner, "127.0.0.1", SUBDOMAIN_PORT)
+        await site.start()
+        logger.info(f"子域名路由监听器已启动: 127.0.0.1:{SUBDOMAIN_PORT} (*.{SUBDOMAIN_BASE})")
+    except OSError as e:
+        logger.error(f"子域名路由监听器启动失败: 端口 {SUBDOMAIN_PORT}: {e}")
+        await subdomain_runner.cleanup()
+        subdomain_runner = None
+
+
+async def _stop_subdomain_listener():
+    """停止子域名路由监听器"""
+    global subdomain_runner
+    if subdomain_runner:
+        await subdomain_runner.cleanup()
+        subdomain_runner = None
+        logger.info("子域名路由监听器已停止")
+
+
+async def _cleanup_subdomain_for_tunnel(code: str):
+    """清理指定隧道的子域名资源"""
+    svc = subdomain_services.pop(code, None)
+    if svc:
+        subdomain = svc.get("subdomain")
+        if subdomain:
+            subdomain_map.pop(subdomain, None)
+            logger.info(f"子域名 '{subdomain}' 已释放 (隧道 {code} 断开)")
+
+
 # 默认说明页 HTML（当路径不匹配隧道编码时展示）
 _DEFAULT_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -657,6 +880,19 @@ async def on_startup(app: web.Application):
         _next_http_port = max_port + 1 if max_port < HTTP_PORT_END else HTTP_PORT_START
         logger.info(f"已恢复 {len(http_port_map)} 个 HTTP 端口映射，下一个可用端口: {_next_http_port}")
 
+    # 从数据库加载已持久化的子域名映射
+    cursor = await _db.execute("SELECT tunnel_code, subdomain, local_port FROM tunnel_subdomain")
+    rows = await cursor.fetchall()
+    for row in rows:
+        t_code, subdomain, lp = row[0], row[1], row[2]
+        subdomain_map[subdomain] = t_code
+        logger.info(f"子域名恢复: {subdomain}.{SUBDOMAIN_BASE} -> 隧道 {t_code}")
+    if subdomain_map:
+        logger.info(f"已恢复 {len(subdomain_map)} 个子域名映射")
+
+    # 启动子域名路由监听器
+    await _start_subdomain_listener()
+
     # 打印启动横幅
     domain = await _get_server_domain()
     tcp_info = f"{TCP_PORT_START}-{TCP_PORT_END}" if TCP_PORT_START else "禁用"
@@ -670,6 +906,8 @@ async def on_startup(app: web.Application):
 ║  地址  : http://0.0.0.0:{SERVER_PORT:<27d}║
 ║  TCP   : {tcp_info:<38s}║
 ║  HTTP  : {http_info:<38s}║
+║  子域名: *.{SUBDOMAIN_BASE:<28s}║
+║  子域端口: {SUBDOMAIN_PORT:<35d}║
 ╚══════════════════════════════════════════════════╝"""
     logger.info(f"域名: {domain}  端口: {SERVER_PORT}")
     logger.info(f"地址: http://0.0.0.0:{SERVER_PORT}")
@@ -719,6 +957,13 @@ async def on_cleanup(app: web.Application):
     # 关闭所有 HTTP 独立端口监听器
     for code in list(http_port_services.keys()):
         await _cleanup_http_port_for_tunnel(code)
+
+    # 清理所有子域名映射
+    for code in list(subdomain_services.keys()):
+        await _cleanup_subdomain_for_tunnel(code)
+
+    # 关闭子域名路由监听器
+    await _stop_subdomain_listener()
 
     # 取消所有待处理请求
     for req_id, future in list(pending_requests.items()):
@@ -1265,6 +1510,78 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                     })
                     logger.info(f"隧道 {code} HTTP 独立端口已分配: {http_url} -> localhost:{lp_int}")
 
+                elif msg_type == "subdomain_register":
+                    # 客户端请求注册子域名
+                    # 请求格式: {"type": "subdomain_register", "subdomain": "myagent", "local_port": 8768}
+                    requested_subdomain = data.get("subdomain", "").strip().lower()
+                    lp = data.get("local_port", 0)
+
+                    if not requested_subdomain:
+                        await ws.send_json({
+                            "type": "subdomain_error",
+                            "message": "子域名不能为空",
+                        })
+                        continue
+
+                    # 验证子域名格式
+                    ok, msg = _validate_subdomain(requested_subdomain)
+                    if not ok:
+                        await ws.send_json({
+                            "type": "subdomain_error",
+                            "message": msg,
+                        })
+                        continue
+
+                    # 检查是否已被其他隧道占用
+                    existing_code = subdomain_map.get(requested_subdomain)
+                    if existing_code and existing_code != code:
+                        # 子域名被其他隧道占用
+                        existing_ws = active_tunnels.get(existing_code)
+                        if existing_ws and not existing_ws.closed:
+                            # 占用者在线，拒绝
+                            await ws.send_json({
+                                "type": "subdomain_error",
+                                "message": f"子域名 '{requested_subdomain}' 已被其他隧道占用",
+                            })
+                            logger.warning(f"隧道 {code} 子域名注册冲突: {requested_subdomain} 已被隧道 {existing_code} 占用")
+                            continue
+                        else:
+                            # 占用者离线，释放旧的映射
+                            old_svc = subdomain_services.pop(existing_code, None)
+                            if old_svc and old_svc.get("subdomain") == requested_subdomain:
+                                subdomain_map.pop(requested_subdomain, None)
+                                logger.info(f"释放离线隧道的子域名: {requested_subdomain} (原隧道 {existing_code})")
+
+                    # 如果该隧道已有子域名，先释放旧的
+                    old_svc = subdomain_services.get(code)
+                    if old_svc:
+                        old_subdomain = old_svc.get("subdomain")
+                        if old_subdomain and old_subdomain != requested_subdomain:
+                            subdomain_map.pop(old_subdomain, None)
+                            logger.info(f"隧道 {code} 释放旧子域名: {old_subdomain}")
+
+                    # 注册子域名
+                    lp_int = int(lp) if lp else 0
+                    subdomain_map[requested_subdomain] = code
+                    subdomain_services[code] = {
+                        "subdomain": requested_subdomain,
+                        "local_port": lp_int,
+                        "subdomain_url": f"http://{requested_subdomain}.{SUBDOMAIN_BASE}",
+                    }
+
+                    # 持久化到数据库
+                    await tunnel_db.save_subdomain(db, code, requested_subdomain, lp_int)
+
+                    # 通知客户端
+                    subdomain_url = f"http://{requested_subdomain}.{SUBDOMAIN_BASE}"
+                    await ws.send_json({
+                        "type": "subdomain_registered",
+                        "subdomain": requested_subdomain,
+                        "local_port": lp_int,
+                        "subdomain_url": subdomain_url,
+                    })
+                    logger.info(f"隧道 {code} 子域名已注册: {subdomain_url} -> localhost:{lp_int}")
+
                 elif msg_type == "tcp_register":
                     # 客户端注册 TCP 转发服务（如 SSH）
                     services = data.get("services", [])
@@ -1381,6 +1698,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
         else:
             await _cleanup_tcp_for_tunnel(code)
             await _cleanup_http_port_for_tunnel(code)
+            await _cleanup_subdomain_for_tunnel(code)
 
     return ws
 

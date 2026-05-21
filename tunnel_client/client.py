@@ -433,7 +433,7 @@ class P2PProxy:
 class TunnelClient:
     def __init__(self, server: str, key: str, local_port: int, local_host: str,
                  p2p: bool, p2p_port: int, tcp_ports: str = "",
-                 http_port_mode: bool = False):
+                 http_port_mode: bool = False, subdomain: str = ""):
         self.server = server
         self.key = key
         self.local_port = local_port
@@ -442,6 +442,7 @@ class TunnelClient:
         self.p2p_port = p2p_port
         self.tcp_ports = tcp_ports  # 逗号分隔的端口号，如 "22,3306"
         self.http_port_mode = http_port_mode  # 是否使用 HTTP 独立端口模式
+        self.subdomain = subdomain  # 子域名前缀，如 "myagent"
         self.ws: aiohttp.ClientWebSocketResponse | None = None
         self.session: aiohttp.ClientSession | None = None
         self.req_count = 0
@@ -463,15 +464,19 @@ class TunnelClient:
         # ---- HTTP 独立端口状态 ----
         self._http_port_info: dict | None = None  # {"local_port", "public_port", "http_url"}
         self._tcp_services: list[dict] = []
+        # ---- 子域名状态 ----
+        self._subdomain_info: dict | None = None  # {"subdomain", "local_port", "subdomain_url"}
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.6.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP)")
+        print(f"\n  Tunnel Client v2.7.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)")
         print(f"  服务器:   {self.server}")
         print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:     {self.local_host}:{self.local_port}")
         print(f"  P2P:      {'启用 (端口 ' + str(self.p2p_port) + ')' if self.p2p else '禁用'}")
         if self.tcp_ports:
             print(f"  TCP转发:  {self.tcp_ports}")
+        if self.subdomain:
+            print(f"  子域名:   {self.subdomain}")
         print()
 
         self.session = aiohttp.ClientSession()
@@ -566,6 +571,14 @@ class TunnelClient:
                     "local_port": self.local_port,
                 })
 
+            # 注册子域名（如果指定了 --subdomain）
+            if self.subdomain and self.ws and not self.ws.closed:
+                await self.ws.send_json({
+                    "type": "subdomain_register",
+                    "subdomain": self.subdomain,
+                    "local_port": self.local_port,
+                })
+
         elif t == "ping":
             # 心跳响应：必须立即回复，不等待任何其他操作
             if self.ws and not self.ws.closed:
@@ -598,6 +611,19 @@ class TunnelClient:
                     "http_url": data.get("http_url", ""),
                 }
                 print(f"  [HTTP端口] localhost:{data.get('local_port')} -> {data.get('http_url')} (公网端口: {data.get('public_port')})")
+
+        elif t == "subdomain_registered":
+            # 服务端已注册子域名
+            self._subdomain_info = {
+                "subdomain": data.get("subdomain"),
+                "local_port": data.get("local_port"),
+                "subdomain_url": data.get("subdomain_url", ""),
+            }
+            print(f"  [子域名] localhost:{data.get('local_port')} -> {data.get('subdomain_url')}")
+
+        elif t == "subdomain_error":
+            # 子域名注册失败（被占用等）
+            print(f"  [子域名] 注册失败: {data.get('message', '未知错误')}")
 
         elif t == "tcp_open":
             # 服务端通知：有新的外部 TCP 连接，需要连接本地端口
@@ -1013,7 +1039,7 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.6.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP)",
+        description="Tunnel Client v2.7.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -1022,7 +1048,8 @@ def main():
   tunnel-p2p-client -k YOUR_TOKEN -p 80 --no-p2p
   tunnel-p2p-client -k YOUR_TOKEN -p 8080 --tcp-ports 22       转发 SSH
   tunnel-p2p-client -k YOUR_TOKEN -p 8080 --tcp-ports 22,3306  转发 SSH + MySQL
-  tunnel-p2p-client -k YOUR_TOKEN -p 8080 --http-port          HTTP 独立端口模式（推荐）
+  tunnel-p2p-client -k YOUR_TOKEN -p 8080 --http-port          HTTP 独立端口模式
+  tunnel-p2p-client -k YOUR_TOKEN -p 8080 --subdomain myagent  子域名模式（推荐）
 
 P2P 模式 (默认启用):
   优先级: IPv6 直连 > UPnP IPv4 > 中继
@@ -1035,8 +1062,13 @@ TCP 转发:
 
 HTTP 独立端口模式:
   --http-port  为此隧道分配独立的 HTTP 公网端口（如 aicq.online:7900）
-               无需路径前缀重写，所有请求直接透传，彻底避免地址问题
-               同时保留路径前缀模式作为备用访问方式
+               无需路径前缀重写，所有请求直接透传
+
+子域名模式（推荐）:
+  --subdomain  指定子域名前缀，映射到 80 端口的子域名地址
+               例如: --subdomain myagent -> http://myagent.tunnel.aicq.online
+               无需路径前缀，直接通过域名访问，最优雅的方式
+               如果子域名已被占用，会收到错误提示
         """,
     )
     parser.add_argument("-k", "--key", required=True, help="认证令牌")
@@ -1046,7 +1078,8 @@ HTTP 独立端口模式:
     parser.add_argument("--p2p-port", type=int, default=0, help="P2P 监听端口 (默认: 与本地端口相同)")
     parser.add_argument("--no-p2p", action="store_true", help="禁用 P2P，强制使用中继模式")
     parser.add_argument("--tcp-ports", default="", help="TCP 转发端口，逗号分隔 (如: 22,3306)")
-    parser.add_argument("--http-port", action="store_true", help="启用 HTTP 独立端口模式（推荐，避免路径重写问题）")
+    parser.add_argument("--http-port", action="store_true", help="启用 HTTP 独立端口模式")
+    parser.add_argument("--subdomain", default="", help="子域名前缀 (如: myagent -> http://myagent.tunnel.aicq.online)")
     args = parser.parse_args()
 
     p2p_enabled = not args.no_p2p
@@ -1061,6 +1094,7 @@ HTTP 独立端口模式:
         p2p_port=p2p_port,
         tcp_ports=args.tcp_ports.strip(),
         http_port_mode=args.http_port,
+        subdomain=args.subdomain.strip().lower(),
     )
 
     loop = asyncio.new_event_loop()

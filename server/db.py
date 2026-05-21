@@ -68,6 +68,15 @@ CREATE TABLE IF NOT EXISTS tunnel_log (
     created_at  TEXT NOT NULL,
     FOREIGN KEY (tunnel_id) REFERENCES tunnel(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS tunnel_subdomain (
+    id          TEXT PRIMARY KEY,
+    tunnel_code TEXT NOT NULL,
+    subdomain   TEXT UNIQUE NOT NULL,
+    local_port  INTEGER NOT NULL,
+    created_at  TEXT NOT NULL,
+    UNIQUE(tunnel_code)
+);
 """
 
 
@@ -327,6 +336,49 @@ async def save_http_port(db: aiosqlite.Connection, tunnel_code: str,
 async def delete_http_port(db: aiosqlite.Connection, tunnel_code: str):
     """删除隧道的 HTTP 端口映射"""
     await db.execute("DELETE FROM tunnel_http_port WHERE tunnel_code = ?", (tunnel_code,))
+    await db.commit()
+
+
+# ======================== 子域名持久化 ========================
+
+async def get_subdomain(db: aiosqlite.Connection, tunnel_code: str) -> Optional[dict]:
+    """获取隧道已持久化的子域名映射"""
+    cursor = await db.execute(
+        "SELECT subdomain, local_port FROM tunnel_subdomain WHERE tunnel_code = ?",
+        (tunnel_code,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        return {"subdomain": row[0], "local_port": row[1]}
+    return None
+
+
+async def get_subdomain_by_name(db: aiosqlite.Connection, subdomain: str) -> Optional[dict]:
+    """根据子域名查找映射"""
+    cursor = await db.execute(
+        "SELECT tunnel_code, subdomain, local_port FROM tunnel_subdomain WHERE subdomain = ?",
+        (subdomain,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        return {"tunnel_code": row[0], "subdomain": row[1], "local_port": row[2]}
+    return None
+
+
+async def save_subdomain(db: aiosqlite.Connection, tunnel_code: str,
+                         subdomain: str, local_port: int):
+    """持久化子域名映射（每个隧道只有一个子域名）"""
+    await db.execute(
+        "INSERT OR REPLACE INTO tunnel_subdomain (id, tunnel_code, subdomain, local_port, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), tunnel_code, subdomain, local_port, _now()),
+    )
+    await db.commit()
+
+
+async def delete_subdomain(db: aiosqlite.Connection, tunnel_code: str):
+    """删除隧道的子域名映射"""
+    await db.execute("DELETE FROM tunnel_subdomain WHERE tunnel_code = ?", (tunnel_code,))
     await db.commit()
 
 
