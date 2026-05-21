@@ -233,6 +233,90 @@ var _A=["src","href","action"];var _ob=new MutationObserver(function(mu){for(var
 })();</script>"""
 
 
+# ======================== 正则预编译缓存 (性能优化) ========================
+
+_rewrite_pattern_cache: dict[str, list[tuple[re.Pattern, str]]] = {}
+_srcset_pattern: re.Pattern = re.compile(
+    r'((?:srcset|data-srcset)\s*=\s*["\'])([^"\']*)(["\'])', re.IGNORECASE
+)
+
+
+def _build_html_patterns(prefix: str) -> list[tuple[re.Pattern, str]]:
+    """Build compiled regex patterns for HTML rewriting with the given prefix."""
+    return [
+        (re.compile(r'(<link\s[^>]*?href\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<script\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<img\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<a\s[^>]*?href\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<iframe\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<form\s[^>]*?action\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<source\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<video\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<audio\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<embed\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<object\s[^>]*?data\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<input\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<area\s[^>]*?href\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<button\s[^>]*?formaction\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(<track\s[^>]*?src\s*=\s*["\'])/', re.IGNORECASE), rf'\1{prefix}/'),
+        (re.compile(r'(url\(\s*["\']?\s*)/'), rf'\1{prefix}/'),
+    ]
+
+
+def _get_html_patterns(prefix: str) -> list[tuple[re.Pattern, str]]:
+    """Get cached compiled HTML rewrite patterns for the given prefix."""
+    if prefix not in _rewrite_pattern_cache:
+        _rewrite_pattern_cache[prefix] = _build_html_patterns(prefix)
+        # Keep cache bounded
+        if len(_rewrite_pattern_cache) > 32:
+            _rewrite_pattern_cache.pop(next(iter(_rewrite_pattern_cache)))
+    return _rewrite_pattern_cache[prefix]
+
+
+def _build_css_patterns(prefix: str) -> list[tuple[re.Pattern, str]]:
+    """Build compiled regex patterns for CSS rewriting with the given prefix."""
+    return [
+        (re.compile(r'(url\(\s*["\']?\s*)/'), rf'\1{prefix}/'),
+        (re.compile(r'(@import\s+["\'])/'), rf'\1{prefix}/'),
+    ]
+
+
+_css_pattern_cache: dict[str, list[tuple[re.Pattern, str]]] = {}
+
+
+def _get_css_patterns(prefix: str) -> list[tuple[re.Pattern, str]]:
+    """Get cached compiled CSS rewrite patterns for the given prefix."""
+    if prefix not in _css_pattern_cache:
+        _css_pattern_cache[prefix] = _build_css_patterns(prefix)
+        if len(_css_pattern_cache) > 32:
+            _css_pattern_cache.pop(next(iter(_css_pattern_cache)))
+    return _css_pattern_cache[prefix]
+
+
+def _build_js_patterns(prefix: str) -> list[tuple[re.Pattern, str]]:
+    """Build compiled regex patterns for JS rewriting with the given prefix."""
+    return [
+        (re.compile(r"(fetch\s*\(\s*['\"])/"), rf"\1{prefix}/"),
+        (re.compile(r"(new\s+URL\s*\(\s*['\"])/"), rf"\1{prefix}/"),
+        (re.compile(r"(location\.href\s*=\s*['\"])/"), rf"\1{prefix}/"),
+        (re.compile(r"(location\.assign\s*\(\s*['\"])/"), rf"\1{prefix}/"),
+        (re.compile(r"(location\.replace\s*\(\s*['\"])/"), rf"\1{prefix}/"),
+        (re.compile(r"(window\.open\s*\(\s*['\"])/"), rf"\1{prefix}/"),
+    ]
+
+
+_js_pattern_cache: dict[str, list[tuple[re.Pattern, str]]] = {}
+
+
+def _get_js_patterns(prefix: str) -> list[tuple[re.Pattern, str]]:
+    """Get cached compiled JS rewrite patterns for the given prefix."""
+    if prefix not in _js_pattern_cache:
+        _js_pattern_cache[prefix] = _build_js_patterns(prefix)
+        if len(_js_pattern_cache) > 32:
+            _js_pattern_cache.pop(next(iter(_js_pattern_cache)))
+    return _js_pattern_cache[prefix]
+
+
 def _rewrite_html(body: bytes, prefix: str) -> bytes:
     """重写 HTML 响应体中的绝对路径，并注入 JS 拦截器。
 
@@ -247,32 +331,12 @@ def _rewrite_html(body: bytes, prefix: str) -> bytes:
     except Exception:
         return body
 
-    # 1) HTML 属性: 按 IDE browser.py 的方式，对每种标签分别处理
-    #    避免过于宽泛的正则误匹配
-    tag_attrs = [
-        (r'(<link\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<script\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<img\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<a\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<iframe\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<form\s[^>]*?action\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<source\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<video\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<audio\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<embed\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<object\s[^>]*?data\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<input\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<area\s[^>]*?href\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<button\s[^>]*?formaction\s*=\s*["\'])/', rf'\1{prefix}/'),
-        (r'(<track\s[^>]*?src\s*=\s*["\'])/', rf'\1{prefix}/'),
-    ]
-    for pattern, replacement in tag_attrs:
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    # 1) HTML 属性 + CSS url(): 使用预编译正则，按 IDE browser.py 的方式，
+    #    对每种标签分别处理，避免过于宽泛的正则误匹配
+    for pattern, replacement in _get_html_patterns(prefix):
+        text = pattern.sub(replacement, text)
 
-    # 2) CSS url(): url(/...) → url(PREFIX/...)
-    text = re.sub(r'(url\(\s*["\']?\s*)/', rf'\1{prefix}/', text)
-
-    # 3) srcset 属性
+    # 2) srcset 属性
     def _rewrite_srcset(m):
         attr_pfx = m.group(1)
         srcset_val = m.group(2)
@@ -291,12 +355,9 @@ def _rewrite_html(body: bytes, prefix: str) -> bytes:
             new_parts.append(url + (' ' + desc if desc else ''))
         return attr_pfx + ', '.join(new_parts) + quote
 
-    text = re.sub(
-        r'((?:srcset|data-srcset)\s*=\s*["\'])([^"\']*)(["\'])',
-        _rewrite_srcset, text, flags=re.IGNORECASE
-    )
+    text = _srcset_pattern.sub(_rewrite_srcset, text)
 
-    # 4) 注入 JS 拦截器 (在 </head> 之前，确保最先执行)
+    # 3) 注入 JS 拦截器 (在 </head> 之前，确保最先执行)
     js = _TUNNEL_JS_INTERCEPTOR.replace("__TUNNEL_CODE__", prefix.strip("/"))
     if "</head>" in text:
         text = text.replace("</head>", js + "\n</head>", 1)
@@ -315,10 +376,8 @@ def _rewrite_css(body: bytes, prefix: str) -> bytes:
     except Exception:
         return body
 
-    # url(/...) → url(PREFIX/...)
-    text = re.sub(r'(url\(\s*["\']?\s*)/', rf'\1{prefix}/', text)
-    # @import '/...' → @import 'PREFIX/...'
-    text = re.sub(r'(@import\s+["\'])/', rf'\1{prefix}/', text)
+    for pattern, replacement in _get_css_patterns(prefix):
+        text = pattern.sub(replacement, text)
 
     return text.encode("utf-8", errors="replace")
 
@@ -334,16 +393,8 @@ def _rewrite_js(body: bytes, prefix: str) -> bytes:
     except Exception:
         return body
 
-    # fetch('/...') → fetch('PREFIX/...')
-    text = re.sub(r"(fetch\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-    # new URL('/...') → new URL('PREFIX/...')
-    text = re.sub(r"(new\s+URL\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-    # location.href = '/...' → location.href = 'PREFIX/...'
-    text = re.sub(r"(location\.href\s*=\s*['\"])/", rf"\1{prefix}/", text)
-    text = re.sub(r"(location\.assign\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-    text = re.sub(r"(location\.replace\s*\(\s*['\"])/", rf"\1{prefix}/", text)
-    # window.open('/...') → window.open('PREFIX/...')
-    text = re.sub(r"(window\.open\s*\(\s*['\"])/", rf"\1{prefix}/", text)
+    for pattern, replacement in _get_js_patterns(prefix):
+        text = pattern.sub(replacement, text)
 
     return text.encode("utf-8", errors="replace")
 
@@ -385,7 +436,12 @@ class P2PProxy:
         self.session: aiohttp.ClientSession | None = None
 
     async def start(self):
-        self.session = aiohttp.ClientSession()
+        connector = aiohttp.TCPConnector(
+            tcp_nodelay=True,
+            enable_compression=True,
+            force_close=False,
+        )
+        self.session = aiohttp.ClientSession(connector=connector)
         app = web.Application()
         app.router.add_route("*", "/{path_info:.*}", self._handler)
         self.runner = web.AppRunner(app)
@@ -423,7 +479,17 @@ class P2PProxy:
                     if k.lower() not in ("transfer-encoding", "connection", "content-length")
                 }
                 # P2P 直连模式不需要路径重写（浏览器直接访问 IP:PORT，无前缀）
-                return web.Response(status=resp.status, body=resp_body, headers=pass_headers)
+                response = web.Response(status=resp.status, body=resp_body, headers=pass_headers)
+                # Enable TCP_NODELAY on the response socket for lower latency
+                try:
+                    transport = request.transport
+                    if transport:
+                        sock = transport.get_extra_info('socket')
+                        if sock:
+                            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except Exception:
+                    pass
+                return response
         except Exception as e:
             return web.Response(status=502, text=f"P2P proxy error: {e}")
 
@@ -468,7 +534,7 @@ class TunnelClient:
         self._subdomain_info: dict | None = None  # {"subdomain", "local_port", "subdomain_url"}
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.9.0 (IPv6/IPv4 P2P + 服务器中转 + HTTP-Port + TCP + Subdomain)")
+        print(f"\n  Tunnel Client v2.10.0 (IPv6/IPv4 P2P + 服务器中转 + HTTP-Port + TCP + Subdomain)")
         print(f"  服务器:     {self.server}")
         print(f"  密钥:       {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:       {self.local_host}:{self.local_port}")
@@ -479,7 +545,15 @@ class TunnelClient:
             print(f"  子域名:   {self.subdomain}")
         print()
 
-        self.session = aiohttp.ClientSession()
+        connector = aiohttp.TCPConnector(
+            tcp_nodelay=True,  # Disable Nagle's algorithm for lower latency
+            enable_compression=True,  # Enable compression
+            force_close=False,  # Reuse connections
+            limit=100,  # Connection pool limit
+            limit_per_host=20,
+        )
+        timeout = aiohttp.ClientTimeout(total=600, connect=10)
+        self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
         while self._running:
             try:
                 await self._connect()
@@ -500,7 +574,7 @@ class TunnelClient:
         base = self.server if self.server.startswith("http") else f"http://{self.server}"
         ws_url = base.replace("http", "ws") + f"/ws?key={self.key}"
 
-        async with self.session.ws_connect(ws_url) as ws:
+        async with self.session.ws_connect(ws_url, compress=True) as ws:
             self.ws = ws
             self.retry_count = 0
             print("  [连接中]...")
@@ -885,6 +959,8 @@ class TunnelClient:
 
         try:
             reader, writer = await asyncio.open_connection(self.local_host, local_port)
+            # Disable Nagle's algorithm for lower latency
+            writer.get_extra_info('socket').setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception as e:
             print(f"  [TCP] 连接本地端口 {local_port} 失败: {e}")
             # 通知服务端连接失败
@@ -925,7 +1001,7 @@ class TunnelClient:
         """
         try:
             while True:
-                data = await reader.read(65536)
+                data = await reader.read(262144)  # 256KB buffer for better throughput
                 if not data:
                     break
                 # 构造二进制帧
@@ -1041,7 +1117,7 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.8.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)",
+        description="Tunnel Client v2.10.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:

@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import json
+import socket
 import time
 from functools import partial
 import secrets
@@ -300,10 +301,18 @@ async def _start_tcp_listener(code: str, public_port: int, local_port: int):
         finally:
             tcp_ready_events.get(code, {}).pop(stream_id, None)
 
+        # Disable Nagle's algorithm for lower latency
+        try:
+            sock = writer.get_extra_info('socket')
+            if sock:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
+
         # 从外部连接读取数据，通过 WebSocket 二进制帧转发到客户端
         try:
             while True:
-                data = await reader.read(65536)
+                data = await reader.read(262144)  # 256KB buffer for better throughput
                 if not data:
                     break
                 # 二进制帧: [1字节 sid_len][sid][data]
@@ -404,6 +413,13 @@ async def _handle_tcp_binary(code: str, data: bytes):
     if not pair:
         return
     _, writer = pair
+    # Ensure TCP_NODELAY is set on the external connection for low latency
+    try:
+        sock = writer.get_extra_info('socket')
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except Exception:
+        pass
     try:
         writer.write(tcp_data)
         await writer.drain()
