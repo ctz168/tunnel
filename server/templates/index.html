@@ -109,6 +109,7 @@
   .tag-dual{background:#F1F8E9;color:#33691E}
   .tag-subdomain{background:#EDE7F6;color:#5E35B1}
   .tag-httpport{background:#FFF3E0;color:#E65100}
+  .tag-tcp{background:#E0F2F1;color:#00695C}
 
   /* ── Empty state ── */
   .empty{text-align:center;padding:56px 20px;color:var(--text-muted)}
@@ -737,13 +738,22 @@ function renderTunnels() {
     var bytesIn = info.bytes_in || 0;
     var bytesOut = info.bytes_out || 0;
 
-    // 构建公网地址列表（最多3种：子域名、HTTP端口、中继/P2P）
+    // 构建公网地址列表（子域名、HTTP端口、TCP转发、P2P直连、中继）
     var urls = [];
     if (online && info.subdomain_url) {
       urls.push({url: info.subdomain_url, label: '子域名', tag: 'subdomain'});
     }
     if (online && info.http_url) {
       urls.push({url: info.http_url, label: 'HTTP端口', tag: 'httpport'});
+    }
+    // TCP 转发服务（如 SSH、MySQL 等）
+    if (online && info.tcp_services && info.tcp_services.length > 0) {
+      var domainHost = DOMAIN.split(':')[0];
+      info.tcp_services.forEach(function(svc) {
+        var tcpUrl = domainHost + ':' + svc.public_port;
+        var svcName = (svc.name || 'tcp').toUpperCase();
+        urls.push({url: tcpUrl, label: svcName, tag: 'tcp'});
+      });
     }
     if (p2pUrl) {
       urls.push({url: p2pUrl, label: 'P2P直连', tag: 'p2p'});
@@ -757,7 +767,7 @@ function renderTunnels() {
     var addrHtml = '<div class="public-url" style="flex-direction:column;align-items:flex-start;gap:4px">';
     urls.forEach(function(u, i) {
       var escapedU = escapeHtml(u.url).replace(/'/g, "\\'");
-      var tagClass = u.tag === 'subdomain' ? 'tag-subdomain' : (u.tag === 'httpport' ? 'tag-httpport' : (u.tag === 'p2p' ? 'tag-p2p' : 'tag-relay'));
+      var tagClass = u.tag === 'subdomain' ? 'tag-subdomain' : (u.tag === 'httpport' ? 'tag-httpport' : (u.tag === 'tcp' ? 'tag-tcp' : (u.tag === 'p2p' ? 'tag-p2p' : 'tag-relay')));
       var tagLabel = u.label;
       addrHtml += '<div style="display:flex;align-items:center;gap:6px;width:100%">';
       addrHtml += '<span class="tag ' + tagClass + '" style="flex-shrink:0;min-width:56px;text-align:center">' + tagLabel + '</span>';
