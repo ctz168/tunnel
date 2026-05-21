@@ -1644,9 +1644,7 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                         await tunnel_db.save_tcp_port(db, code, lp_int, public_port, name)
                         if preferred and public_port == preferred:
                             logger.info(f"隧道 {code} TCP 端口复用: {name} -> {public_port} (local:{lp_int})")
-                    if code not in tcp_services:
-                        tcp_services[code] = []
-                    tcp_services[code].extend(allocated)
+                    tcp_services[code] = allocated
                     # 通知客户端已分配的端口
                     await ws.send_json({
                         "type": "tcp_registered",
