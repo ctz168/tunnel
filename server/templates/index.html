@@ -324,6 +324,7 @@
         <button class="btn btn-ghost btn-icon" onclick="showDomainEdit()" title="编辑域名">&#x270F;&#xFE0F;</button>
       </div>
     </div>
+    <button class="btn btn-ghost btn-sm" onclick="openSslModal()">&#x1F512; 证书</button>
     <button class="btn btn-ghost btn-sm" onclick="doLogout()">&#x1F6AA; 退出</button>
   </div>
 </header>
@@ -361,6 +362,22 @@
     </div>
   </div>
 </main>
+
+<!-- SSL Certificate Modal -->
+<div class="modal-overlay" id="sslModal">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <h3>&#x1F512; SSL 证书管理</h3>
+      <button class="modal-close" onclick="closeSslModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="sslContent">
+      <div class="log-empty">加载中...</div>
+    </div>
+    <div class="form-actions" id="sslActions">
+      <button class="btn btn-ghost" onclick="closeSslModal()">关闭</button>
+    </div>
+  </div>
+</div>
 
 </div><!-- end mainApp -->
 
@@ -1013,6 +1030,112 @@ document.addEventListener('keydown', function(e) {
 });
 
 /* ── Init ── */
+/* ── SSL Certificate Management ── */
+var sslData = null;
+function openSslModal() {
+  document.getElementById('sslModal').classList.add('active');
+  loadSslInfo();
+}
+function closeSslModal() {
+  document.getElementById('sslModal').classList.remove('active');
+}
+function loadSslInfo() {
+  var content = document.getElementById('sslContent');
+  content.innerHTML = '<div class="log-empty">加载中...</div>';
+  fetch('/api/ssl')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      sslData = data;
+      var html = '';
+      // Certificate status
+      if (data.cert_exists) {
+        var daysLeft = data.cert_days_left;
+        var daysClass = daysLeft > 30 ? 'color:var(--success)' : (daysLeft > 7 ? 'color:var(--warning)' : 'color:var(--danger)');
+        html += '<div style="background:var(--success-light);border:1px solid var(--border-light);border-radius:8px;padding:14px;margin-bottom:16px">';
+        html += '<div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px">&#x1F512; 证书状态</div>';
+        html += '<div style="font-size:12px;color:var(--text-secondary)">';
+        html += '<div>域名: <strong>' + escapeHtml(data.cert_subject || data.domain || '-') + '</strong></div>';
+        html += '<div>生效: ' + escapeHtml(data.cert_not_before || '-') + '</div>';
+        html += '<div>到期: ' + escapeHtml(data.cert_not_after || '-') + '</div>';
+        html += '<div>剩余: <strong style="' + daysClass + '">' + daysLeft + ' 天</strong></div>';
+        html += '</div></div>';
+      } else {
+        html += '<div style="background:var(--warning-light);border:1px solid var(--border-light);border-radius:8px;padding:14px;margin-bottom:16px">';
+        html += '<div style="font-size:13px;color:var(--text)">&#x26A0;&#xFE0F; 未检测到有效证书文件</div>';
+        html += '</div>';
+      }
+      // Config form
+      html += '<div class="form-group">';
+      html += '<label>证书域名</label>';
+      html += '<input type="text" id="sslDomain" value="' + escapeHtml(data.domain || '*.tunnel.aicq.online') + '" placeholder="例如: *.tunnel.aicq.online">';
+      html += '</div>';
+      html += '<div class="form-group">';
+      html += '<label>阿里云 AccessKey ID</label>';
+      html += '<input type="text" id="sslAliKey" value="' + escapeHtml(data.ali_key_set ? data.ali_key_mask || '****' : '') + '" placeholder="输入 AccessKey ID">';
+      html += '</div>';
+      html += '<div class="form-group">';
+      html += '<label>阿里云 AccessKey Secret</label>';
+      html += '<input type="text" id="sslAliSecret" placeholder="' + (data.ali_key_set ? '已配置，留空不修改' : '输入 AccessKey Secret') + '">';
+      html += '</div>';
+      // Last renew info
+      if (data.last_renew) {
+        html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">上次续证: ' + escapeHtml(data.last_renew) + '</div>';
+      }
+      if (data.renew_log) {
+        html += '<div style="font-size:11px;color:var(--text-muted);background:var(--bg);padding:10px;border-radius:8px;margin-bottom:12px;max-height:120px;overflow-y:auto;font-family:var(--font-mono);word-break:break-all">' + escapeHtml(data.renew_log.substring(0, 500)) + '</div>';
+      }
+      content.innerHTML = html;
+      // Update actions
+      document.getElementById('sslActions').innerHTML =
+        '<button class="btn btn-ghost" onclick="closeSslModal()">关闭</button>' +
+        '<button class="btn btn-ghost" onclick="saveSslConfig()">保存配置</button>' +
+        '<button class="btn btn-primary" onclick="doSslRenew()">&#x1F504; 一键续证</button>';
+    })
+    .catch(function() {
+      content.innerHTML = '<div class="log-empty">加载失败</div>';
+    });
+}
+function saveSslConfig() {
+  var domain = document.getElementById('sslDomain').value.trim();
+  var aliKey = document.getElementById('sslAliKey').value.trim();
+  var aliSecret = document.getElementById('sslAliSecret').value.trim();
+  if (!domain) { showToast('请输入域名', 'error'); return; }
+  fetch('/api/ssl/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain: domain, ali_key: aliKey, ali_secret: aliSecret })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.error) { showToast(data.error, 'error'); return; }
+    showToast('SSL 配置已保存', 'success');
+    loadSslInfo();
+  })
+  .catch(function() { showToast('请求失败', 'error'); });
+}
+function doSslRenew() {
+  showToast('正在续证，请稍候...', 'info');
+  fetch('/api/ssl/renew', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        showToast('证书续期成功! 剩余 ' + (data.days_left || '?') + ' 天', 'success');
+        loadSslInfo();
+      } else {
+        showToast('续证失败: ' + (data.error || '未知错误'), 'error');
+        if (data.output) {
+          // Show output in a temporary area
+          var content = document.getElementById('sslContent');
+          var outputDiv = document.createElement('div');
+          outputDiv.style.cssText = 'font-size:11px;color:var(--danger);background:var(--danger-light);padding:10px;border-radius:8px;margin-top:12px;max-height:200px;overflow-y:auto;font-family:var(--font-mono);word-break:break-all';
+          outputDiv.textContent = data.output.substring(0, 1000);
+          content.appendChild(outputDiv);
+        }
+      }
+    })
+    .catch(function() { showToast('请求失败', 'error'); });
+}
+
 checkAuth();
 </script>
 </body>

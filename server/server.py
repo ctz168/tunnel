@@ -1226,18 +1226,47 @@ async def get_logs_handler(request: web.Request) -> web.Response:
 
 
 async def get_tunnel_status_handler(request: web.Request) -> web.Response:
-    """GET /api/tunnel-status — 获取所有隧道的实时状态（轻量，仅读内存）"""
+    """GET /api/tunnel-status — 获取所有隧道的实时状态（轻量，仅读内存）
+
+    返回每种暴露公网地址:
+      - subdomain_url: xxx.tunnel.aicq.online (子域名模式)
+      - http_url: aicq.online:端口号 (HTTP独立端口模式)
+      - relay_url: aicq.online:7739/编码 (中继模式，始终存在)
+    """
+    domain = await _get_server_domain()
+    domain_host = domain.split(":")[0] if ":" in domain else domain
+
     status_map: dict[str, dict] = {}
     for code, meta in tunnel_meta.items():
         ws_conn = active_tunnels.get(code)
         if ws_conn and not ws_conn.closed:
-            status_map[code] = {
+            info: dict = {
                 "online": True,
                 "connected_at": meta.get("connected_at", ""),
                 "bytes_in": meta.get("bytes_in", 0),
                 "bytes_out": meta.get("bytes_out", 0),
                 "request_count": meta.get("request_count", 0),
+                "relay_url": f"http://{domain}/{code}",
             }
+            # 子域名地址
+            sd_svc = subdomain_services.get(code)
+            if sd_svc:
+                sd_url = sd_svc.get("subdomain_url", "")
+                if not sd_url:
+                    sd_url = f"https://{sd_svc.get('subdomain', '')}.{SUBDOMAIN_BASE}"
+                info["subdomain_url"] = sd_url
+            # HTTP 独立端口地址
+            hp_svc = http_port_services.get(code)
+            if hp_svc:
+                hp_port = hp_svc.get("public_port")
+                if hp_port:
+                    info["http_url"] = f"http://{domain_host}:{hp_port}"
+            # TCP 端口信息
+            tcp_svc = tcp_services.get(code)
+            if tcp_svc:
+                info["tcp_services"] = tcp_svc
+
+            status_map[code] = info
     return web.json_response({"tunnels": status_map})
 
 
@@ -1566,14 +1595,14 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                     subdomain_services[code] = {
                         "subdomain": requested_subdomain,
                         "local_port": lp_int,
-                        "subdomain_url": f"http://{requested_subdomain}.{SUBDOMAIN_BASE}",
+                        "subdomain_url": f"https://{requested_subdomain}.{SUBDOMAIN_BASE}",
                     }
 
                     # 持久化到数据库
                     await tunnel_db.save_subdomain(db, code, requested_subdomain, lp_int)
 
                     # 通知客户端
-                    subdomain_url = f"http://{requested_subdomain}.{SUBDOMAIN_BASE}"
+                    subdomain_url = f"https://{requested_subdomain}.{SUBDOMAIN_BASE}"
                     await ws.send_json({
                         "type": "subdomain_registered",
                         "subdomain": requested_subdomain,
