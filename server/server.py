@@ -1945,6 +1945,367 @@ pre{{background:#1e293b;padding:16px;border-radius:8px;overflow:auto;white-space
         return web.Response(text=f"读取日志失败: {e}", status=500)
 
 
+# ======================== SSL 证书管理端点 ========================
+
+async def ssl_config_handler(request: web.Request) -> web.Response:
+    """GET /api/ssl — 获取 SSL 证书配置和状态"""
+    if not _check_session(request):
+        return web.json_response({"error": "未登录"}, status=401)
+
+    config = await tunnel_db.get_ssl_config(_get_db())
+
+    # 即使没有配置也读取实际证书文件信息
+    cert_info = _read_cert_info()
+
+    result = {
+        "has_config": config is not None,
+        "domain": config["domain"] if config else "",
+        "ali_key_set": bool(config and config.get("ali_key")),
+        "ali_key_mask": _mask_key(config["ali_key"]) if config and config.get("ali_key") else "",
+        "cert_path": config["cert_path"] if config else "",
+        "key_path": config["key_path"] if config else "",
+        "not_before": config.get("not_before") if config else None,
+        "not_after": config.get("not_after") if config else None,
+        "last_renew": config.get("last_renew") if config else None,
+        "renew_log": config.get("renew_log", "") if config else "",
+    }
+
+    # 合并实际证书文件信息
+    if cert_info:
+        result["cert_not_before"] = cert_info["not_before"]
+        result["cert_not_after"] = cert_info["not_after"]
+        result["cert_subject"] = cert_info["subject"]
+        result["cert_days_left"] = cert_info["days_left"]
+        result["cert_exists"] = True
+    else:
+        result["cert_exists"] = False
+        result["cert_days_left"] = None
+
+    return web.json_response(result)
+
+
+async def ssl_save_config_handler(request: web.Request) -> web.Response:
+    """POST /api/ssl/config — 保存阿里云 AccessKey 配置"""
+    if not _check_session(request):
+        return web.json_response({"error": "未登录"}, status=401)
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "请求体不是合法的 JSON"}, status=400)
+
+    domain = body.get("domain", "").strip()
+    ali_key = body.get("ali_key", "").strip()
+    ali_secret = body.get("ali_secret", "").strip()
+
+    if not domain:
+        return web.json_response({"error": "缺少域名"}, status=400)
+    if not ali_key or not ali_secret:
+        return web.json_response({"error": "缺少阿里云 AccessKey ID 或 Secret"}, status=400)
+
+    config = await tunnel_db.save_ssl_config(_get_db(), domain, ali_key, ali_secret)
+
+    # 同时写入 acme.sh 的配置文件，以便续证时自动使用
+    _save_acme_ali_credentials(domain, ali_key, ali_secret)
+
+    logger.info(f"SSL 配置已保存: domain={domain}, ali_key={_mask_key(ali_key)}")
+
+    return web.json_response({
+        "success": True,
+        "domain": config["domain"],
+        "ali_key_mask": _mask_key(ali_key),
+    })
+
+
+async def ssl_renew_handler(request: web.Request) -> web.Response:
+    """POST /api/ssl/renew — 一键续证"""
+    if not _check_session(request):
+        return web.json_response({"error": "未登录"}, status=401)
+
+    config = await tunnel_db.get_ssl_config(_get_db())
+    if not config or not config.get("ali_key"):
+        return web.json_response({"error": "请先配置阿里云 AccessKey"}, status=400)
+
+    domain = config["domain"]
+    ali_key = config["ali_key"]
+    ali_secret = config["ali_secret"]
+
+    logger.info(f"开始续证: domain={domain}")
+
+    try:
+        # 使用 acme.sh + dns_ali 插件自动续证
+        success, output = await _run_acme_renew(domain, ali_key, ali_secret)
+
+        if success:
+            # 读取新证书信息
+            cert_info = _read_cert_info_for_domain(domain)
+            if cert_info:
+                await tunnel_db.update_ssl_cert_info(
+                    _get_db(),
+                    cert_info["not_before"],
+                    cert_info["not_after"],
+                    output[-2000:] if output else "续证成功",
+                )
+
+                # 重载 Nginx
+                _reload_nginx()
+
+                logger.info(f"续证成功: domain={domain}, 到期={cert_info['not_after']}")
+                return web.json_response({
+                    "success": True,
+                    "message": "证书续期成功",
+                    "not_before": cert_info["not_before"],
+                    "not_after": cert_info["not_after"],
+                    "days_left": cert_info["days_left"],
+                    "output": output[-1000:] if output else "",
+                })
+            else:
+                logger.warning(f"续证成功但无法读取证书信息: domain={domain}")
+                return web.json_response({
+                    "success": True,
+                    "message": "续证成功，但无法读取新证书信息",
+                    "output": output[-1000:] if output else "",
+                })
+        else:
+            # 续证失败
+            await tunnel_db.update_ssl_cert_info(
+                _get_db(),
+                config.get("not_before", ""),
+                config.get("not_after", ""),
+                output[-2000:] if output else "续证失败",
+            )
+            logger.error(f"续证失败: domain={domain}, output={output[-500:]}")
+            return web.json_response({
+                "success": False,
+                "error": "证书续期失败",
+                "output": output[-2000:] if output else "",
+            }, status=500)
+
+    except Exception as e:
+        logger.error(f"续证异常: {e}")
+        return web.json_response({"error": f"续证异常: {str(e)}"}, status=500)
+
+
+# ---- SSL 辅助函数 ----
+
+def _mask_key(key: str) -> str:
+    """对 AccessKey 做脱敏显示：只显示前4位和后2位"""
+    if not key or len(key) <= 6:
+        return "****"
+    return key[:4] + "*" * (len(key) - 6) + key[-2:]
+
+
+def _read_cert_info() -> dict | None:
+    """读取泛域名证书文件信息（从 ssl_config 或默认路径）"""
+    import subprocess
+    cert_paths = [
+        "/etc/letsencrypt/live/tunnel.aicq.online/fullchain.pem",
+    ]
+    for cert_path in cert_paths:
+        # 先检查文件是否可读（可能需要 sudo）
+        if os.path.exists(cert_path):
+            try:
+                result = subprocess.run(
+                    ["openssl", "x509", "-in", cert_path, "-noout",
+                     "-subject", "-dates", "-ext", "subjectAltName"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    return _parse_cert_output(result.stdout)
+            except Exception:
+                pass
+        # 尝试 sudo 读取
+        try:
+            result = subprocess.run(
+                ["sudo", "openssl", "x509", "-in", cert_path, "-noout",
+                 "-subject", "-dates", "-ext", "subjectAltName"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                return _parse_cert_output(result.stdout)
+        except Exception:
+            pass
+    return None
+
+
+def _read_cert_info_for_domain(domain: str) -> dict | None:
+    """读取指定域名的证书信息"""
+    import subprocess
+    cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
+    if not os.path.exists(cert_path):
+        # 尝试 acme.sh 的默认路径
+        cert_path = f"/root/.acme.sh/*.{domain}_ecc/fullchain.cer"
+
+    # 尝试直接读取和 sudo 读取
+    for prefix in [[], ["sudo"]]:
+        try:
+            result = subprocess.run(
+                prefix + ["openssl", "x509", "-in", cert_path, "-noout",
+                 "-subject", "-dates"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                return _parse_cert_output(result.stdout)
+        except Exception:
+            pass
+    return None
+
+
+def _parse_cert_output(output: str) -> dict:
+    """解析 openssl x509 输出"""
+    subject = ""
+    not_before = ""
+    not_after = ""
+    days_left = 0
+
+    for line in output.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("subject="):
+            subject = line
+        elif line.startswith("notBefore="):
+            not_before = line.replace("notBefore=", "").strip()
+        elif line.startswith("notAfter="):
+            not_after = line.replace("notAfter=", "").strip()
+            # 计算剩余天数
+            try:
+                from datetime import datetime as _dt
+                dt_after = _dt.strptime(not_after, "%b %d %H:%M:%S %Y %Z")
+                days_left = (dt_after - _dt.utcnow()).days
+            except Exception:
+                pass
+
+    return {
+        "subject": subject,
+        "not_before": not_before,
+        "not_after": not_after,
+        "days_left": days_left,
+    }
+
+
+def _save_acme_ali_credentials(domain: str, ali_key: str, ali_secret: str):
+    """将阿里云 API 密钥写入 acme.sh 配置文件，供续证时自动使用"""
+    try:
+        # 通过 sudo 写入 acme.sh 的 account.conf（/root 只有 root 可访问）
+        script = f"""
+grep -v '^Ali_Key=' /root/.acme.sh/account.conf > /tmp/acme_conf_tmp 2>/dev/null || cp /root/.acme.sh/account.conf /tmp/acme_conf_tmp
+grep -v '^Ali_Secret=' /tmp/acme_conf_tmp > /tmp/acme_conf_tmp2
+echo "Ali_Key='{ali_key}'" >> /tmp/acme_conf_tmp2
+echo "Ali_Secret='{ali_secret}'" >> /tmp/acme_conf_tmp2
+cp /tmp/acme_conf_tmp2 /root/.acme.sh/account.conf
+rm -f /tmp/acme_conf_tmp /tmp/acme_conf_tmp2
+echo "DONE"
+"""
+        proc = subprocess.run(
+            ["sudo", "bash", "-c", script],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "DONE" in proc.stdout:
+            logger.info(f"阿里云 API 密钥已写入 acme.sh 配置")
+        else:
+            logger.warning(f"写入 acme.sh 配置可能失败: {proc.stdout} {proc.stderr}")
+    except Exception as e:
+        logger.warning(f"写入 acme.sh 配置失败: {e}")
+
+
+async def _run_acme_renew(domain: str, ali_key: str, ali_secret: str) -> tuple[bool, str]:
+    """执行 acme.sh 续证/重新签发命令
+
+    如果证书原先是以 --dns 手动模式申请的，acme.sh --renew 会拒绝续期。
+    此时需要用 --issue --dns dns_ali --force 重新签发，让 acme.sh 切换到
+    dns_ali 自动模式，以后就能正常 --renew 了。
+    """
+    import subprocess
+
+    acme_sh = "/root/.acme.sh/acme.sh"
+
+    # lighthouse 用户无法直接访问 /root，需要通过 sudo 执行
+    # 先检查 acme.sh 是否存在
+    check = subprocess.run(
+        ["sudo", "bash", "-c", f"test -f {acme_sh} && echo OK || echo MISSING"],
+        capture_output=True, text=True, timeout=10,
+    )
+    if "OK" not in check.stdout:
+        return False, f"acme.sh 未安装或无法访问 (路径: {acme_sh})"
+
+    # 先尝试 --renew（适用于已经是 dns_ali 模式的证书）
+    renew_cmd = (
+        f"export Ali_Key='{ali_key}' Ali_Secret='{ali_secret}'; "
+        f"{acme_sh} --renew -d '*.{domain}' -d {domain} --dns dns_ali --force 2>&1"
+    )
+    proc = subprocess.run(
+        ["sudo", "bash", "-c", renew_cmd],
+        capture_output=True, text=True, timeout=300,
+    )
+    output = proc.stdout + "\n" + proc.stderr
+
+    # 如果 --renew 失败且提示手动 DNS 模式，则用 --issue 重新签发
+    if proc.returncode != 0 and "dns manual mode" in output.lower():
+        logger.info(f"检测到手动DNS模式证书，切换到 dns_ali 自动模式重新签发")
+        # 先删除旧证书记录，让 acme.sh 从零开始
+        remove_cmd = (
+            f"{acme_sh} --remove -d '*.{domain}' -d {domain} --ecc 2>&1 || true"
+        )
+        subprocess.run(
+            ["sudo", "bash", "-c", remove_cmd],
+            capture_output=True, text=True, timeout=30,
+        )
+        # 重新签发
+        issue_cmd = (
+            f"export Ali_Key='{ali_key}' Ali_Secret='{ali_secret}'; "
+            f"{acme_sh} --issue -d '*.{domain}' -d {domain} --dns dns_ali --ecc --force 2>&1"
+        )
+        proc = subprocess.run(
+            ["sudo", "bash", "-c", issue_cmd],
+            capture_output=True, text=True, timeout=300,
+        )
+        output = proc.stdout + "\n" + proc.stderr
+
+    success = proc.returncode == 0
+
+    if success:
+        # 签发/续证成功，用 sudo 安装证书到 letsencrypt 路径
+        # 注意：acme.sh 的目录名中 * 会被替换为 __ 或 _，如 __.tunnel.aicq.online_ecc
+        install_cmd = f"""
+# 查找 acme.sh 证书目录（通配符域名目录名可能以 __. 或 _. 开头）
+src_dir=$(ls -d /root/.acme.sh/__.{domain}_ecc /root/.acme.sh/_.{domain}_ecc 2>/dev/null | head -1)
+if [ -z "$src_dir" ]; then
+    src_dir=$(find /root/.acme.sh/ -maxdepth 1 -name '*.{domain}_ecc' -type d | head -1)
+fi
+dst_dir="/etc/letsencrypt/live/{domain}"
+mkdir -p "$dst_dir"
+if [ -n "$src_dir" ] && [ -d "$src_dir" ]; then
+    cp "$src_dir/fullchain.cer" "$dst_dir/fullchain.pem" 2>/dev/null || true
+    cp "$src_dir/"*.key "$dst_dir/privkey.pem" 2>/dev/null || true
+    cp "$src_dir/ca.cer" "$dst_dir/chain.pem" 2>/dev/null || true
+    chmod 644 "$dst_dir/fullchain.pem" "$dst_dir/chain.pem" 2>/dev/null || true
+    chmod 600 "$dst_dir/privkey.pem" 2>/dev/null || true
+    echo "CERT_INSTALLED from $src_dir"
+else
+    echo "CERT_SRC_NOT_FOUND"
+fi
+"""
+        install_proc = subprocess.run(
+            ["sudo", "bash", "-c", install_cmd],
+            capture_output=True, text=True, timeout=30,
+        )
+        if "CERT_INSTALLED" in install_proc.stdout:
+            logger.info(f"证书已安装到 /etc/letsencrypt/live/{domain}")
+        else:
+            logger.warning(f"证书安装可能失败: {install_proc.stdout} {install_proc.stderr}")
+
+    return success, output
+
+
+def _reload_nginx():
+    """重载 Nginx 配置"""
+    import subprocess
+    try:
+        subprocess.run(["systemctl", "reload", "nginx"], timeout=10)
+        logger.info("Nginx 已重载")
+    except Exception as e:
+        logger.warning(f"Nginx 重载失败: {e}")
+
+
 # ======================== 应用工厂 ========================
 
 async def on_error_page(request: web.Request) -> web.Response:
@@ -1987,6 +2348,11 @@ def create_app() -> web.Application:
     app.router.add_post("/api/auth/setup", auth_setup_handler)
     app.router.add_post("/api/auth/login", auth_login_handler)
     app.router.add_post("/api/auth/logout", auth_logout_handler)
+
+    # ---- SSL 证书管理路由 ----
+    app.router.add_get("/api/ssl", ssl_config_handler)
+    app.router.add_post("/api/ssl/config", ssl_save_config_handler)
+    app.router.add_post("/api/ssl/renew", ssl_renew_handler)
 
     # ---- Debug 端点 ----
     app.router.add_get("/debug/logs", debug_logs_handler)

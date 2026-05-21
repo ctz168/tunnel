@@ -468,7 +468,7 @@ class TunnelClient:
         self._subdomain_info: dict | None = None  # {"subdomain", "local_port", "subdomain_url"}
 
     async def start(self):
-        print(f"\n  Tunnel Client v2.7.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)")
+        print(f"\n  Tunnel Client v2.8.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)")
         print(f"  服务器:   {self.server}")
         print(f"  密钥:     {self.key[:16]}{'...' if len(self.key) > 16 else ''}")
         print(f"  本地:     {self.local_host}:{self.local_port}")
@@ -1039,7 +1039,7 @@ class TunnelClient:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tunnel Client v2.7.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)",
+        description="Tunnel Client v2.8.0 (IPv6/IPv4 P2P + Relay + HTTP-Port + TCP + Subdomain)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:

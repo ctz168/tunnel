@@ -107,6 +107,8 @@
   .tag-ipv6{background:#E8F5E9;color:#2E7D32}
   .tag-upnp{background:#E3F2FD;color:#1565C0}
   .tag-dual{background:#F1F8E9;color:#33691E}
+  .tag-subdomain{background:#EDE7F6;color:#5E35B1}
+  .tag-httpport{background:#FFF3E0;color:#E65100}
 
   /* ── Empty state ── */
   .empty{text-align:center;padding:56px 20px;color:var(--text-muted)}
@@ -714,9 +716,39 @@ function renderTunnels() {
     var online = info.online ? true : false;
     var p2pUrl = t.public_url || '';
     var p2pMode = online && p2pUrl;
-    var pubUrl = p2pUrl || ('http://' + DOMAIN + '/' + code);
+    var relayUrl = 'http://' + DOMAIN + '/' + code;
     var bytesIn = info.bytes_in || 0;
     var bytesOut = info.bytes_out || 0;
+
+    // 构建公网地址列表（最多3种：子域名、HTTP端口、中继/P2P）
+    var urls = [];
+    if (online && info.subdomain_url) {
+      urls.push({url: info.subdomain_url, label: '子域名', tag: 'subdomain'});
+    }
+    if (online && info.http_url) {
+      urls.push({url: info.http_url, label: 'HTTP端口', tag: 'httpport'});
+    }
+    if (p2pUrl) {
+      urls.push({url: p2pUrl, label: 'P2P直连', tag: 'p2p'});
+    }
+    urls.push({url: relayUrl, label: '中继', tag: 'relay'});
+
+    var primaryUrl = urls[0].url;
+    var escapedPrimaryUrl = escapeHtml(primaryUrl).replace(/'/g, "\\'");
+
+    // 地址列 HTML：主地址 + 展开按钮（如有多个）
+    var addrHtml = '<div class="public-url" style="flex-direction:column;align-items:flex-start;gap:4px">';
+    urls.forEach(function(u, i) {
+      var escapedU = escapeHtml(u.url).replace(/'/g, "\\'");
+      var tagClass = u.tag === 'subdomain' ? 'tag-subdomain' : (u.tag === 'httpport' ? 'tag-httpport' : (u.tag === 'p2p' ? 'tag-p2p' : 'tag-relay'));
+      var tagLabel = u.label;
+      addrHtml += '<div style="display:flex;align-items:center;gap:6px;width:100%">';
+      addrHtml += '<span class="tag ' + tagClass + '" style="flex-shrink:0;min-width:56px;text-align:center">' + tagLabel + '</span>';
+      addrHtml += '<span style="flex:1;font-family:var(--font-mono);font-size:12px;word-break:break-all">' + escapeHtml(u.url) + '</span>';
+      addrHtml += '<button class="btn btn-ghost btn-icon btn-sm" onclick="copyText(\'' + escapedU + '\')" title="复制" style="flex-shrink:0">&#x1F4CB;</button>';
+      addrHtml += '</div>';
+    });
+    addrHtml += '</div>';
 
     // P2P mode badges
     var p2pInfo = null;
@@ -743,7 +775,6 @@ function renderTunnels() {
     }
 
     var escapedName = escapeHtml(t.name || '-');
-    var escapedPubUrl = escapeHtml(pubUrl).replace(/'/g, "\\'");
 
     html += '<tr>' +
       '<td data-label="名称"><strong>' + escapedName + '</strong>' +
@@ -763,10 +794,7 @@ function renderTunnels() {
           '&#x2B06; <b>' + formatBytes(bytesIn) + '</b> &middot; &#x2B07; <b>' + formatBytes(bytesOut) + '</b>' +
         '</span>' +
       '</td>' +
-      '<td data-label="地址"><div class="public-url">' +
-        '<span style="flex:1">' + escapeHtml(pubUrl) + '</span>' +
-        '<button class="btn btn-ghost btn-icon btn-sm" onclick="copyText(\'' + escapedPubUrl + '\')" title="复制">&#x1F4CB;</button>' +
-      '</div></td>' +
+      '<td data-label="地址">' + addrHtml + '</td>' +
       '<td data-label="操作"><div class="actions-cell">' +
         '<button class="btn btn-ghost btn-sm" onclick="viewToken(\'' + sid + '\',\'' + escapedName + '\')">&#x1F511; 密钥</button>' +
         '<button class="btn btn-ghost btn-sm" onclick="openLogModal(\'' + sid + '\',\'' + escapedName + '\')">&#x1F4CB; 日志</button>' +

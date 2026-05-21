@@ -107,6 +107,8 @@
   .tag-ipv6{background:#E8F5E9;color:#2E7D32}
   .tag-upnp{background:#E3F2FD;color:#1565C0}
   .tag-dual{background:#F1F8E9;color:#33691E}
+  .tag-subdomain{background:#EDE7F6;color:#5E35B1}
+  .tag-httpport{background:#FFF3E0;color:#E65100}
 
   /* ── Empty state ── */
   .empty{text-align:center;padding:56px 20px;color:var(--text-muted)}
@@ -322,12 +324,6 @@
         <button class="btn btn-ghost btn-icon" onclick="showDomainEdit()" title="编辑域名">&#x270F;&#xFE0F;</button>
       </div>
     </div>
-    <div id="sslBadgeArea" style="display:none">
-      <div class="domain-display" style="cursor:pointer" onclick="openSslModal()" title="点击管理证书">
-        <span class="label">&#x1F512; SSL</span>
-        <span id="sslDaysLeft" style="font-weight:600"></span>
-      </div>
-    </div>
     <button class="btn btn-ghost btn-sm" onclick="doLogout()">&#x1F6AA; 退出</button>
   </div>
 </header>
@@ -444,22 +440,6 @@
   </div>
 </div>
 
-<!-- SSL Certificate Modal -->
-<div class="modal-overlay" id="sslModal">
-  <div class="modal" style="max-width:620px">
-    <div class="modal-header">
-      <h3>&#x1F512; SSL 证书管理</h3>
-      <button class="modal-close" onclick="closeSslModal()">&times;</button>
-    </div>
-    <div class="modal-body" id="sslModalBody">
-      <div class="log-empty">加载中...</div>
-    </div>
-    <div class="form-actions" id="sslModalActions">
-      <button class="btn btn-ghost" onclick="closeSslModal()">关闭</button>
-    </div>
-  </div>
-</div>
-
 <script>
 /* ── Globals ── */
 const DOMAIN = "{{ domain }}";
@@ -512,8 +492,6 @@ function showApp() {
   // 初始加载一次隧道列表和状态
   fetchTunnels();
   fetchTunnelStatus();
-  // 加载 SSL 证书状态
-  fetchSslStatus();
   // 建立 SSE 长连接，接收上下线事件推送
   connectSSE();
 }
@@ -738,9 +716,39 @@ function renderTunnels() {
     var online = info.online ? true : false;
     var p2pUrl = t.public_url || '';
     var p2pMode = online && p2pUrl;
-    var pubUrl = p2pUrl || ('http://' + DOMAIN + '/' + code);
+    var relayUrl = 'http://' + DOMAIN + '/' + code;
     var bytesIn = info.bytes_in || 0;
     var bytesOut = info.bytes_out || 0;
+
+    // 构建公网地址列表（最多3种：子域名、HTTP端口、中继/P2P）
+    var urls = [];
+    if (online && info.subdomain_url) {
+      urls.push({url: info.subdomain_url, label: '子域名', tag: 'subdomain'});
+    }
+    if (online && info.http_url) {
+      urls.push({url: info.http_url, label: 'HTTP端口', tag: 'httpport'});
+    }
+    if (p2pUrl) {
+      urls.push({url: p2pUrl, label: 'P2P直连', tag: 'p2p'});
+    }
+    urls.push({url: relayUrl, label: '中继', tag: 'relay'});
+
+    var primaryUrl = urls[0].url;
+    var escapedPrimaryUrl = escapeHtml(primaryUrl).replace(/'/g, "\\'");
+
+    // 地址列 HTML：主地址 + 展开按钮（如有多个）
+    var addrHtml = '<div class="public-url" style="flex-direction:column;align-items:flex-start;gap:4px">';
+    urls.forEach(function(u, i) {
+      var escapedU = escapeHtml(u.url).replace(/'/g, "\\'");
+      var tagClass = u.tag === 'subdomain' ? 'tag-subdomain' : (u.tag === 'httpport' ? 'tag-httpport' : (u.tag === 'p2p' ? 'tag-p2p' : 'tag-relay'));
+      var tagLabel = u.label;
+      addrHtml += '<div style="display:flex;align-items:center;gap:6px;width:100%">';
+      addrHtml += '<span class="tag ' + tagClass + '" style="flex-shrink:0;min-width:56px;text-align:center">' + tagLabel + '</span>';
+      addrHtml += '<span style="flex:1;font-family:var(--font-mono);font-size:12px;word-break:break-all">' + escapeHtml(u.url) + '</span>';
+      addrHtml += '<button class="btn btn-ghost btn-icon btn-sm" onclick="copyText(\'' + escapedU + '\')" title="复制" style="flex-shrink:0">&#x1F4CB;</button>';
+      addrHtml += '</div>';
+    });
+    addrHtml += '</div>';
 
     // P2P mode badges
     var p2pInfo = null;
@@ -767,7 +775,6 @@ function renderTunnels() {
     }
 
     var escapedName = escapeHtml(t.name || '-');
-    var escapedPubUrl = escapeHtml(pubUrl).replace(/'/g, "\\'");
 
     html += '<tr>' +
       '<td data-label="名称"><strong>' + escapedName + '</strong>' +
@@ -787,10 +794,7 @@ function renderTunnels() {
           '&#x2B06; <b>' + formatBytes(bytesIn) + '</b> &middot; &#x2B07; <b>' + formatBytes(bytesOut) + '</b>' +
         '</span>' +
       '</td>' +
-      '<td data-label="地址"><div class="public-url">' +
-        '<span style="flex:1">' + escapeHtml(pubUrl) + '</span>' +
-        '<button class="btn btn-ghost btn-icon btn-sm" onclick="copyText(\'' + escapedPubUrl + '\')" title="复制">&#x1F4CB;</button>' +
-      '</div></td>' +
+      '<td data-label="地址">' + addrHtml + '</td>' +
       '<td data-label="操作"><div class="actions-cell">' +
         '<button class="btn btn-ghost btn-sm" onclick="viewToken(\'' + sid + '\',\'' + escapedName + '\')">&#x1F511; 密钥</button>' +
         '<button class="btn btn-ghost btn-sm" onclick="openLogModal(\'' + sid + '\',\'' + escapedName + '\')">&#x1F4CB; 日志</button>' +
@@ -1007,212 +1011,6 @@ document.addEventListener('keydown', function(e) {
     if (logPollTimer) { clearInterval(logPollTimer); logPollTimer = null; }
   }
 });
-
-/* ── SSL Certificate Management ── */
-var sslData = null;
-
-function fetchSslStatus() {
-  if (!isLoggedIn) return;
-  fetch('/api/ssl')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      sslData = data;
-      updateSslBadge(data);
-    })
-    .catch(function() {});
-}
-
-function updateSslBadge(data) {
-  var badge = document.getElementById('sslBadgeArea');
-  var label = document.getElementById('sslDaysLeft');
-  if (!badge || !label) return;
-
-  // Always show the SSL badge so users can click to configure
-  badge.style.display = '';
-
-  if (data.cert_exists && data.cert_days_left != null) {
-    var days = data.cert_days_left;
-    if (days > 30) {
-      label.textContent = days + ' 天';
-      label.style.color = 'var(--success)';
-    } else if (days > 7) {
-      label.textContent = days + ' 天';
-      label.style.color = 'var(--warning)';
-    } else {
-      label.textContent = days + ' 天!';
-      label.style.color = 'var(--danger)';
-    }
-  } else {
-    label.textContent = '未配置';
-    label.style.color = 'var(--text-muted)';
-  }
-}
-
-function openSslModal() {
-  document.getElementById('sslModal').classList.add('active');
-  document.getElementById('sslModalBody').innerHTML = '<div class="log-empty">加载中...</div>';
-  fetch('/api/ssl')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      sslData = data;
-      renderSslModal(data);
-    })
-    .catch(function() {
-      document.getElementById('sslModalBody').innerHTML = '<div class="log-empty">加载失败</div>';
-    });
-}
-
-function closeSslModal() {
-  document.getElementById('sslModal').classList.remove('active');
-}
-
-function renderSslModal(data) {
-  var body = document.getElementById('sslModalBody');
-  var actions = document.getElementById('sslModalActions');
-
-  var html = '';
-
-  // Certificate Status Section
-  html += '<div style="margin-bottom:20px">';
-  html += '<h4 style="font-size:14px;font-weight:700;margin-bottom:10px;color:var(--text)">&#x1F4CB; 证书状态</h4>';
-
-  if (data.cert_exists) {
-    var days = data.cert_days_left || 0;
-    var statusColor = days > 30 ? 'var(--success)' : (days > 7 ? 'var(--warning)' : 'var(--danger)');
-    var statusBg = days > 30 ? 'var(--success-light)' : (days > 7 ? 'var(--warning-light)' : 'var(--danger-light)');
-    var statusText = days > 30 ? '正常' : (days > 7 ? '即将过期' : '即将过期!');
-
-    html += '<div style="background:' + statusBg + ';border:1px solid ' + statusColor + ';border-radius:var(--radius);padding:14px;margin-bottom:12px">';
-    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">';
-    html += '<span style="font-weight:700;color:' + statusColor + ';font-size:15px">' + statusText + '</span>';
-    html += '<span style="font-size:28px;font-weight:800;color:' + statusColor + '">' + days + ' <span style="font-size:14px;font-weight:400">天</span></span>';
-    html += '</div>';
-    if (data.cert_subject) {
-      html += '<div style="font-size:12px;color:var(--text-muted);font-family:var(--font-mono)">' + escapeHtml(data.cert_subject) + '</div>';
-    }
-    if (data.cert_not_after) {
-      html += '<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">到期时间: ' + escapeHtml(data.cert_not_after) + '</div>';
-    }
-    if (data.cert_not_before) {
-      html += '<div style="font-size:12px;color:var(--text-muted)">签发时间: ' + escapeHtml(data.cert_not_before) + '</div>';
-    }
-    html += '</div>';
-  } else {
-    html += '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:12px;text-align:center">';
-    html += '<div style="color:var(--text-muted);font-size:13px">暂无证书文件</div>';
-    html += '</div>';
-  }
-  html += '</div>';
-
-  // Last Renew Log
-  if (data.last_renew) {
-    html += '<div style="margin-bottom:16px;font-size:12px;color:var(--text-muted)">上次续证: ' + escapeHtml(data.last_renew) + '</div>';
-  }
-
-  // AccessKey Config Section
-  html += '<div style="margin-bottom:20px">';
-  html += '<h4 style="font-size:14px;font-weight:700;margin-bottom:10px;color:var(--text)">&#x1F511; 阿里云 DNS API 配置</h4>';
-  html += '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">配置阿里云 AccessKey 后，可一键自动续证泛域名证书（通过 DNS-01 验证）</p>';
-
-  var savedKey = data.ali_key_set ? data.ali_key_mask : '';
-  html += '<div class="form-group">';
-  html += '<label>域名</label>';
-  html += '<input type="text" id="sslDomain" value="' + escapeHtml(data.domain || 'tunnel.aicq.online') + '" placeholder="例如: tunnel.aicq.online">';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>AccessKey ID ' + (savedKey ? '<span style="font-weight:400;color:var(--success)">（已配置: ' + escapeHtml(savedKey) + '）</span>' : '') + '</label>';
-  html += '<input type="text" id="sslAliKey" placeholder="LTAI..." ' + (savedKey ? 'value=""' : '') + '>';
-  html += '</div>';
-
-  html += '<div class="form-group">';
-  html += '<label>AccessKey Secret</label>';
-  html += '<input type="password" id="sslAliSecret" placeholder="' + (savedKey ? '留空保持不变' : '输入 Secret') + '">';
-  html += '</div>';
-  html += '</div>';
-
-  body.innerHTML = html;
-
-  // Update actions
-  actions.innerHTML =
-    '<button class="btn btn-ghost" onclick="closeSslModal()">关闭</button>' +
-    '<button class="btn btn-primary" onclick="saveSslConfig()">&#x1F4BE; 保存配置</button>' +
-    (data.ali_key_set ? '<button class="btn btn-primary" style="background:var(--success)" onclick="renewSslCert()" id="renewBtn">&#x1F504; 一键续证</button>' : '');
-}
-
-function saveSslConfig() {
-  var domain = document.getElementById('sslDomain').value.trim();
-  var aliKey = document.getElementById('sslAliKey').value.trim();
-  var aliSecret = document.getElementById('sslAliSecret').value.trim();
-
-  if (!domain) { showToast('请输入域名', 'error'); return; }
-  if (!aliKey && !sslData.ali_key_set) { showToast('请输入 AccessKey ID', 'error'); return; }
-  if (!aliSecret && !sslData.ali_key_set) { showToast('请输入 AccessKey Secret', 'error'); return; }
-
-  var payload = { domain: domain };
-  if (aliKey) payload.ali_key = aliKey;
-  if (aliSecret) payload.ali_secret = aliSecret;
-
-  fetch('/api/ssl/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(data) {
-    if (data.error) { showToast(data.error, 'error'); return; }
-    showToast('配置保存成功', 'success');
-    // Refresh the modal
-    openSslModal();
-    fetchSslStatus();
-  })
-  .catch(function() { showToast('保存失败', 'error'); });
-}
-
-function renewSslCert() {
-  var btn = document.getElementById('renewBtn');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.textContent = '⏳ 续证中...';
-
-  // Show progress in modal body
-  var body = document.getElementById('sslModalBody');
-  var progressDiv = document.createElement('div');
-  progressDiv.id = 'renewProgress';
-  progressDiv.style.cssText = 'margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-family:var(--font-mono);font-size:12px;max-height:200px;overflow-y:auto;white-space:pre-wrap;color:var(--text-secondary)';
-  progressDiv.textContent = '正在续证，请稍候...\n这可能需要 1-2 分钟\n';
-  body.appendChild(progressDiv);
-
-  fetch('/api/ssl/renew', { method: 'POST' })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      btn.disabled = false;
-      btn.textContent = '🔄 一键续证';
-
-      var prog = document.getElementById('renewProgress');
-      if (data.success) {
-        showToast('证书续期成功! 剩余 ' + (data.days_left || '?') + ' 天', 'success');
-        if (prog) {
-          prog.textContent = '续证成功!\n新证书到期: ' + (data.not_after || '未知') + '\n剩余天数: ' + (data.days_left || '?');
-          prog.style.color = 'var(--success)';
-        }
-        fetchSslStatus();
-        // Refresh modal after 2s
-        setTimeout(function() { openSslModal(); }, 2000);
-      } else {
-        showToast(data.error || '续证失败', 'error');
-        if (prog) {
-          prog.textContent = '续证失败\n' + (data.output || data.error || '未知错误');
-          prog.style.color = 'var(--danger)';
-        }
-      }
-    })
-    .catch(function(e) {
-      btn.disabled = false;
-      btn.textContent = '🔄 一键续证';
-      showToast('请求失败', 'error');
-    });
-}
 
 /* ── Init ── */
 checkAuth();

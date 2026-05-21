@@ -77,6 +77,20 @@ CREATE TABLE IF NOT EXISTS tunnel_subdomain (
     created_at  TEXT NOT NULL,
     UNIQUE(tunnel_code)
 );
+
+CREATE TABLE IF NOT EXISTS ssl_config (
+    id          TEXT PRIMARY KEY,
+    domain      TEXT NOT NULL,
+    ali_key     TEXT NOT NULL DEFAULT '',
+    ali_secret  TEXT NOT NULL DEFAULT '',
+    cert_path   TEXT NOT NULL DEFAULT '',
+    key_path    TEXT NOT NULL DEFAULT '',
+    not_before  TEXT,
+    not_after   TEXT,
+    last_renew  TEXT,
+    renew_log   TEXT DEFAULT '',
+    updated_at  TEXT NOT NULL
+);
 """
 
 
@@ -380,6 +394,65 @@ async def delete_subdomain(db: aiosqlite.Connection, tunnel_code: str):
     """删除隧道的子域名映射"""
     await db.execute("DELETE FROM tunnel_subdomain WHERE tunnel_code = ?", (tunnel_code,))
     await db.commit()
+
+
+# ======================== SSL 证书配置 ========================
+
+async def get_ssl_config(db: aiosqlite.Connection) -> Optional[dict]:
+    """获取 SSL 证书配置"""
+    cursor = await db.execute(
+        "SELECT id, domain, ali_key, ali_secret, cert_path, key_path, not_before, not_after, last_renew, renew_log, updated_at "
+        "FROM ssl_config LIMIT 1"
+    )
+    row = await cursor.fetchone()
+    if row:
+        return {
+            "id": row[0], "domain": row[1],
+            "ali_key": row[2], "ali_secret": row[3],
+            "cert_path": row[4], "key_path": row[5],
+            "not_before": row[6], "not_after": row[7],
+            "last_renew": row[8], "renew_log": row[9],
+            "updated_at": row[10],
+        }
+    return None
+
+
+async def save_ssl_config(db: aiosqlite.Connection, domain: str,
+                          ali_key: str, ali_secret: str) -> dict:
+    """保存 SSL 证书的阿里云 API 配置"""
+    existing = await get_ssl_config(db)
+    now = _now()
+    if existing:
+        await db.execute(
+            "UPDATE ssl_config SET domain = ?, ali_key = ?, ali_secret = ?, updated_at = ? WHERE id = ?",
+            (domain, ali_key, ali_secret, now, existing["id"]),
+        )
+    else:
+        tid = str(uuid.uuid4())
+        cert_path = f"/etc/letsencrypt/live/{domain}/fullchain.pem"
+        key_path = f"/etc/letsencrypt/live/{domain}/privkey.pem"
+        await db.execute(
+            "INSERT INTO ssl_config (id, domain, ali_key, ali_secret, cert_path, key_path, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tid, domain, ali_key, ali_secret, cert_path, key_path, now),
+        )
+    await db.commit()
+    return await get_ssl_config(db)
+
+
+async def update_ssl_cert_info(db: aiosqlite.Connection, not_before: str,
+                                not_after: str, renew_log: str = "") -> dict:
+    """更新证书的有效期信息（续证成功后调用）"""
+    existing = await get_ssl_config(db)
+    if not existing:
+        return None
+    now = _now()
+    await db.execute(
+        "UPDATE ssl_config SET not_before = ?, not_after = ?, last_renew = ?, renew_log = ?, updated_at = ? WHERE id = ?",
+        (not_before, not_after, now, renew_log, now, existing["id"]),
+    )
+    await db.commit()
+    return await get_ssl_config(db)
 
 
 # ======================== Helpers ========================
