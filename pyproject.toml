@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tunnel-p2p-client"
-version = "2.10.0"
+version = "2.10.1"
 description = "Tunnel 内网穿透客户端 - 支持 IPv6/IPv4 P2P + 服务器中转 + HTTP独立端口 + TCP转发 + 子域名路由"
 readme = "README.md"
 license = "MIT"
